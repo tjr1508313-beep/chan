@@ -24,10 +24,16 @@ description: 미국주식 외부 데이터 소스(yfinance/Finnhub/Polygon 등) 
 
 **MVP 권장**: `yfinance` (시세) + `FinanceDataReader` (종목 리스트 + 한글명) 조합
 
-## 담당 파일 (신규 생성)
-- `us_data_client.py` — 메인 클라이언트 (조회 함수 모음)
-- `us_ticker_mapping.py` — 티커 ↔ 한글 종목명 매핑 (정적 CSV or JSON)
-- `china_stock_filter.py` — 중국기업 식별 (HQ 국가 기반 or 사전 리스트)
+## 담당 파일 (신규 생성 — 서브패키지 구조 준수)
+- `screening/data.py` — 미국주식 데이터 메인 클라이언트 (조회 함수 모음)
+- `screening/ticker_mapping.py` — 티커 ↔ 한글 종목명 매핑 (정적 CSV or JSON)
+- `screening/china_filter.py` — 중국기업 식별 (HQ 국가 기반 or 사전 리스트)
+- `data/china_stocks.csv` — 중국기업 정적 리스트 (데이터 파일은 `data/` 폴더)
+- `data/us_ticker_kr.csv` — 티커 한글명 매핑 테이블
+
+## 통합 대비 필수 규칙
+- 공개 함수명에 **`us_` 접두사** (예: `us_get_nasdaq_tickers`, `us_load_prices`)
+- `@st.cache_data` 사용 시 동일 접두사 적용 (매매일지 캐시와 분리)
 
 ## 주요 함수 (인터페이스)
 ```python

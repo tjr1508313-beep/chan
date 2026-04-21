@@ -78,6 +78,46 @@
 - 현재는 **완전 독립**된 두 프로젝트
 - 나중에 사용자가 직접 하나의 루트 폴더로 묶을 예정 → 통합 시 본 CLAUDE.md도 수정 필요
 
+## 통합 대비 코딩 규칙 (반드시 준수)
+매매일지 프로젝트와 나중에 병합할 때 충돌을 피하기 위한 사전 규칙.
+
+### 1. 서브패키지 구조
+스크리닝 로직은 모두 `screening/` 패키지 안에 넣는다. 진입점 `screening.py`는 껍데기만.
+```
+C:\스크리닝\
+├── screening.py          # Streamlit 진입점 (통합 시 폐기)
+└── screening/            # 로직 패키지 (통합 시 통째로 이동)
+    ├── __init__.py
+    ├── ui.py             # render_screening_tab() 등 탭 렌더링 함수
+    ├── core.py           # RS 계산, 필터링
+    ├── data.py           # yfinance / FDR 호출
+    ├── cache.py          # SQLite 캐시
+    └── theme.py          # CSS/스타일 (함수로 감싸기)
+```
+
+### 2. session_state 네임스페이싱
+모든 `st.session_state` 키는 **`scr_` 접두사** 필수.
+- 예: `scr_selected_ticker`, `scr_rs_period`, `scr_filter_config`
+- 매매일지 쪽은 접두사 없음 → 충돌 방지
+
+### 3. st.set_page_config 위치
+`screening.py` 진입점의 **`main()` 함수 안에서** 호출 (모듈 최상단 금지).
+통합 시 이 호출만 지우면 됨.
+
+### 4. CSS 주입은 함수로 분리
+`screening/theme.py`의 `apply_theme()` 함수로 감싸기.
+통합 시 매매일지 CSS와 머지해서 1회만 호출되도록.
+
+### 5. 함수명 접두사 (캐시 충돌 예방)
+`@st.cache_data` 로 캐시되는 함수는 **`us_` 접두사** 또는 **`screen_` 접두사**.
+- 예: `us_load_prices(ticker)`, `screen_calc_rs(...)`
+- 매매일지 쪽 `load_trades()` 등과 이름 겹치면 캐시 섞임
+
+### 6. requirements.txt 버전 표기
+`==` 고정 버전 대신 **`>=` 최소 버전** 사용.
+- 매매일지와 병합 시 버전 충돌 최소화
+- 예: `streamlit>=1.30`, `pandas>=2.0`
+
 ## 확정된 MVP 결정 사항 (2026-04-21)
 - **데이터 소스**: `yfinance`(시세) + `FinanceDataReader`(종목 리스트) 조합
 - **RS 공식**: 단순 비율 방식 `RS = (종목 N일 수익률) / (지수 N일 수익률)`, 기본 기간 20일, 슬라이더 조정 가능

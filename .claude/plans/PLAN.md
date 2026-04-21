@@ -22,12 +22,17 @@
 ### 작업 순서
 
 #### 1.1 프로젝트 스켈레톤 🔜
-- [ ] `C:\스크리닝\` 루트 세팅
-- [ ] `requirements.txt` 작성 (streamlit, pandas, plotly, yfinance, FinanceDataReader 등)
-- [ ] `screening.py` 메인 Streamlit 앱 스켈레톤 (탭 구조: `[미국] [한국] [코인]`)
-- [ ] `start.sh` / `스크리닝 실행.bat` 실행 스크립트
-- [ ] `.gitignore` (DB, Parquet, `__pycache__`, `.streamlit/secrets.toml`)
+- [x] `C:\스크리닝\` 루트 세팅 + git init + 초기 커밋
+- [x] `.gitignore` (DB, Parquet, 시크릿, `__pycache__`)
+- [ ] `requirements.txt` — `>=` 최소 버전 표기 (통합 대비)
+- [ ] `screening/` 서브패키지 생성 (`__init__.py`, `ui.py`, `core.py`, `data.py`, `cache.py`, `theme.py`)
+- [ ] `screening.py` 진입점 — `main()` 안에서 `set_page_config` 호출, 탭 구조 `[미국] [한국] [코인]`
+- [ ] `start.sh` / `스크리닝 실행.bat`
 - 담당: agent2(프론트) + agent3(백엔드)
+- ⚠️ **통합 대비 규칙 준수** (CLAUDE.md "통합 대비 코딩 규칙" 참조):
+  - session_state 키는 `scr_` 접두사
+  - CSS는 `apply_theme()` 함수로
+  - 캐시 함수는 `us_`/`screen_` 접두사
 
 #### 1.2 데이터 API 연동
 - [x] 데이터 소스 결정: **yfinance + FDR**

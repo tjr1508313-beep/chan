@@ -35,10 +35,15 @@ description: RS(상대강도) 계산, 필터링 로직, 랭킹, 데이터 캐시
 4. **중국기업 제외** (HQ 또는 상장국 기준)
 5. **최근 20일 내 일일 변동폭 50% 이상 있는 종목 제외**
 
-## 담당 파일 (신규 생성)
-- `screening_core.py` — RS 계산, 필터링, 랭킹 메인 로직
-- `cache.py` — 시세/메타데이터 캐시 (SQLite or Parquet)
-- `db_schema.py` — 캐시 DB 스키마 정의
+## 담당 파일 (신규 생성 — 서브패키지 구조 준수)
+- `screening/core.py` — RS 계산, 필터링, 랭킹 메인 로직
+- `screening/cache.py` — 시세/메타데이터 SQLite 캐시 (`screening_cache.db`)
+- `screening/db_schema.py` — 캐시 DB 스키마 정의 (선택, cache.py에 통합 가능)
+
+## 통합 대비 필수 규칙
+- 함수명에 **`screen_` 또는 `us_` 접두사** (매매일지와 캐시/이름 충돌 방지)
+  - 예: `screen_calc_rs()`, `screen_apply_filters()`, `us_load_prices()`
+- session_state 직접 접근 시 **`scr_` 접두사** 필수
 
 ## DB/캐시 설계 방향
 ```
