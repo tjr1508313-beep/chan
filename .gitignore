@@ -21,6 +21,9 @@ api_keys.json
 .vscode/
 .idea/
 
+# Claude Code 로컬 권한 캐시 (개인 환경별로 다름)
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
