@@ -21,70 +21,59 @@
 
 ### 작업 순서
 
-#### 1.1 프로젝트 스켈레톤 🔜
+#### 1.1 프로젝트 스켈레톤 ✅ (2026-04-21)
 - [x] `C:\스크리닝\` 루트 세팅 + git init + 초기 커밋
 - [x] `.gitignore` (DB, Parquet, 시크릿, `__pycache__`)
-- [ ] `requirements.txt` — `>=` 최소 버전 표기 (통합 대비)
-- [ ] `screening/` 서브패키지 생성 (`__init__.py`, `ui.py`, `core.py`, `data.py`, `cache.py`, `theme.py`)
-- [ ] `screening.py` 진입점 — `main()` 안에서 `set_page_config` 호출, 탭 구조 `[미국] [한국] [코인]`
-- [ ] `start.sh` / `스크리닝 실행.bat`
-- 담당: agent2(프론트) + agent3(백엔드)
-- ⚠️ **통합 대비 규칙 준수** (CLAUDE.md "통합 대비 코딩 규칙" 참조):
-  - session_state 키는 `scr_` 접두사
-  - CSS는 `apply_theme()` 함수로
-  - 캐시 함수는 `us_`/`screen_` 접두사
+- [x] `requirements.txt` — `>=` 최소 버전 표기
+- [x] `screening/` 서브패키지 (`__init__.py`, `ui.py`, `core.py`, `data.py`, `cache.py`, `theme.py`)
+- [x] `screening.py` 진입점 — `main()` 안에서 `set_page_config`, 탭 `[미국] [한국] [코인]`
+- [x] `start.sh` / `스크리닝 실행.bat`
 
-#### 1.2 데이터 API 연동
-- [x] 데이터 소스 결정: **yfinance + FDR**
-- [ ] `us_data_client.py`: 나스닥/S&P500 티커 리스트, 일봉, 지수, 메타
-- [ ] `us_ticker_mapping.py`: 티커 ↔ 한글명 매핑 — **MVP 후반부로 연기 (1.8 이후)**
-- [ ] `china_stock_filter.py`: 중국기업 리스트 + 동적 판별 (HQ country 기준)
-- 담당: agent4(데이터 API)
+#### 1.2 데이터 API 연동 ✅ (2026-04-21)
+- [x] 데이터 소스: **yfinance + FDR**
+- [x] `screening/data.py`: 나스닥/S&P500 티커 리스트(`us_get_nasdaq_tickers`, `us_get_sp500_tickers`), 일봉(`us_load_prices`, `auto_adjust=True`), 지수(`us_load_index`), 메타(`us_get_meta`)
+- [x] `screening/china_filter.py` + `data/china_stocks.csv` — ADR 30개 시드 + country fallback 2단계 판정
+- [x] 한글명 매핑(`data/us_ticker_kr.csv`) — 1.8에서 완료
 
-#### 1.3 캐시 계층
-- [ ] `cache.py`: 일일 시세/메타데이터 SQLite 저장 (`screening_cache.db`)
-- [ ] 증분 업데이트 로직 (마지막 저장일 이후만 새로 받기)
-- [ ] 수동 "전체 새로고침" 버튼 대비 함수 분리
-- 담당: agent3(백엔드)
+#### 1.3 캐시 계층 ✅ (2026-04-21)
+- [x] `screening/cache.py`: SQLite 4테이블 (`prices`, `metadata`, `index_prices`, `settings`), CRUD + TTL
+- [x] `screening/batch.py`: `screen_refresh_prices/_meta/_index` 오케스트레이션 (증분 + rate limit)
+- [x] `dollar_volume` 자동 계산 저장 (Phase 1.4에서 바로 사용)
 
-#### 1.4 필터링 로직
-- [ ] `screening_core.py`의 `apply_filters(df, config)`:
-  - 주가 ≥ $10
-  - 20일 평균 거래대금 ≥ **$20M** (달러 기준)
-  - 관리종목 제외 (`is_risk_stock`)
-  - 중국기업 제외 (`is_china_stock`)
-  - 최근 20일 일일 변동폭 50%+ 이력 있는 종목 제외
-- [ ] 필터링 결과 로그 (몇 개 → 몇 개로 축소) UI 표시용 반환
-- 담당: agent3(백엔드)
+#### 1.4 필터링 로직 ✅ (2026-04-21)
+- [x] `screen_build_screening_df(tickers, lookback_days=20)` — 캐시 집계
+- [x] `screen_apply_filters(df, config)` — 5종 필터 순차 적용 + stats 반환 (`total → after_price → … → final`)
+- [x] 변동폭 공식: `(High - Low) / prev_close`, 기본 50% 이상 제외
 
-#### 1.5 RS 계산 로직
-- [x] 공식 확정: **단순 비율 방식** `RS = (종목 N일 수익률) / (지수 N일 수익률)`
-- [ ] `screening_core.py`의 `calc_rs(prices, index_prices, period)` 구현
-- [ ] 결과 정렬 → 상위 N개 반환
-- [ ] 테스트: 나스닥/S&P500 각각 정상 동작 확인
-- 담당: agent3(백엔드)
+#### 1.5 RS 계산 로직 ✅ (2026-04-21)
+- [x] 공식 확정: **단순 비율 방식** `RS = (종목 N일 수익률) / (지수 N일 수익률)`, epsilon 처리
+- [x] `screen_calc_rs(prices, index_prices, period)` — 단일/wide 포맷 지원
+- [x] `screen_rank_rs(tickers, index_code, period, top_n)` — 캐시 직접 조회 편의 함수
+- [x] 테스트: AAPL/MSFT/NVDA/BABA + ^IXIC로 합리적 랭킹 확인 (NVDA 1위)
 - 🔖 Phase 1 완료 후 블로그(best-n-optimal) 재확인하여 가중 합산으로 개선 검토
 
-#### 1.6 UI — 랭킹 테이블
-- [ ] 사이드바: 자산(미국 고정) + 지수(나스닥/S&P) + RS 기간 슬라이더(5~60, 기본 20)
-- [ ] 메인 테이블: 순위 / 티커 / 한글명 / 현재가 / RS 점수 / 20일 수익률 / 거래대금
-- [ ] 행 클릭 시 하단 차트 패널 업데이트
-- [ ] 필터 적용 전후 종목 수 표시 (예: "3,500 → 247 → Top 20")
-- 담당: agent2(프론트)
+#### 1.6 UI — 랭킹 테이블 ✅ (2026-04-21)
+- [x] 사이드바: 지수(나스닥/S&P) + RS 기간 슬라이더 + Top N 슬라이더 + 캐시 새로고침 + 필터 설정 expander
+- [x] 메인 테이블: 순위 / 티커 / 종목명 / 현재가 / RS / N일 수익률 / 거래대금(M$) — 한국식 색상
+- [x] 행 선택 → `st.session_state["scr_selected_ticker"]` 저장 → 차트 패널 연동
+- [x] 필터 축소 흐름 캡션 + 지수 음수 수익률 경고 + 빈 상태 안내
 
-#### 1.7 UI — 차트 패널
-- [ ] Plotly 캔들스틱 (최근 3~6개월)
-- [ ] 5일 이평선 오버레이
-- [ ] 9일 ATR 오버레이 (별도 서브플롯 or 음영 밴드)
-- [ ] 다크 테마 + 한국식 색상 (상승 빨강, 하락 파랑)
-- 담당: agent2(프론트)
+#### 1.7 UI — 차트 패널 ✅ (2026-04-21)
+- [x] Plotly 2행 서브플롯 (캔들 + 5MA / 9-ATR)
+- [x] 5일 이평선 (SMA)
+- [x] 9일 ATR (Wilder 공식)
+- [x] 다크 테마 + 한국식 색상 (상승 빨강 `#ff4b4b` / 하락 파랑 `#1a9cff`), 주말 rangebreak, 하단 3칸 메트릭
 
-#### 1.8 마감 작업
-- [ ] 실행 테스트 (Streamlit + 전체 파이프라인)
-- [ ] 한글 종목명 Top 200 CSV 매핑 추가 (`us_ticker_mapping.py`)
-- [ ] README 간단 사용법 작성 (필요 시)
-- [ ] `MEMORY.md` (`.claude/projects/...`) 초기 기록
-- [ ] Phase 1 완료 체크
+#### 1.8 마감 작업 ✅ (2026-04-21)
+- [x] 한글 종목명 CSV 매핑 (`data/us_ticker_kr.csv`, 시드 69종) — `us_get_meta`에서 자동 조회
+- [x] 전체 파이프라인 스모크 테스트 (build → filter → rank)
+- [x] `MEMORY.md` 초기 기록 (프로젝트 루트)
+- [ ] 실행 테스트 (Streamlit 런타임, 사용자 몫)
+- [ ] README (필요 시, 현 시점 CLAUDE.md로 충분)
+- [x] Phase 1 완료 체크
+
+### Phase 1 완료 🎉
+모든 구현 체크 완료. 사용자가 `streamlit run screening.py`로 실 환경 테스트 진행 단계.
 
 ---
 

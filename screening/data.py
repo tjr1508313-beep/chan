@@ -8,20 +8,101 @@
     - 공개 함수명은 `us_` 접두사
     - `@st.cache_data` 사용 시에도 동일 접두사 유지 (매매일지 캐시와 충돌 방지)
 
-Phase 1.2 이후 실제 구현 예정. 현 단계는 시그니처 스켈레톤만.
+캐시 데코레이터는 백엔드(`screening/cache.py`)에서 SQLite 캐시와 함께 일괄 부착 예정이므로
+이 모듈은 **순수 함수**로만 구성한다 (streamlit import 금지).
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+from pathlib import Path
+
 import pandas as pd
 
+from .china_filter import is_china_ticker
+
+
+# ---------------------------------------------------------------------------
+# 내부 유틸
+# ---------------------------------------------------------------------------
+
+# 영업일 대비 달력일 버퍼. 주말/공휴일 고려해 넉넉히 곱함.
+_CAL_DAYS_MULTIPLIER = 1.6
+_CAL_DAYS_FLOOR = 7
+
+# 한글명 매핑 CSV (ticker → 한글명). 없거나 매핑 안 되어 있으면 None.
+_KR_NAME_CSV = Path(__file__).resolve().parent.parent / "data" / "us_ticker_kr.csv"
+_KR_NAME_CACHE: dict[str, str] | None = None
+
+
+def _load_kr_name_map() -> dict[str, str]:
+    """티커 → 한글명 매핑 로드 (프로세스 내 1회 캐시)."""
+    global _KR_NAME_CACHE
+    if _KR_NAME_CACHE is not None:
+        return _KR_NAME_CACHE
+
+    if not _KR_NAME_CSV.exists():
+        _KR_NAME_CACHE = {}
+        return _KR_NAME_CACHE
+
+    try:
+        df = pd.read_csv(_KR_NAME_CSV, dtype=str).dropna(subset=["ticker", "name_kr"])
+        _KR_NAME_CACHE = {
+            str(row["ticker"]).strip().upper(): str(row["name_kr"]).strip()
+            for _, row in df.iterrows()
+            if str(row["ticker"]).strip() and str(row["name_kr"]).strip()
+        }
+    except Exception:
+        _KR_NAME_CACHE = {}
+    return _KR_NAME_CACHE
+
+
+def us_get_kr_name(ticker: str) -> str | None:
+    """티커에 매핑된 한글명 반환. 없으면 None."""
+    if not ticker:
+        return None
+    return _load_kr_name_map().get(str(ticker).strip().upper())
+
+
+def _calendar_span(days: int) -> int:
+    """영업일 `days` 를 안전하게 덮을 달력일 수."""
+    return max(_CAL_DAYS_FLOOR, int(days * _CAL_DAYS_MULTIPLIER))
+
+
+def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    """yfinance 다중 컬럼/빈 DF 등을 표준 OHLCV 로 정규화."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+
+    # yfinance 가 MultiIndex 컬럼을 돌려줄 때 대비
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.copy()
+        df.columns = df.columns.get_level_values(0)
+
+    wanted = ["Open", "High", "Low", "Close", "Volume"]
+    existing = [c for c in wanted if c in df.columns]
+    out = df[existing].copy()
+    out.index = pd.to_datetime(out.index).tz_localize(None) if getattr(out.index, "tz", None) else pd.to_datetime(out.index)
+    out = out.sort_index()
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 종목 리스트
+# ---------------------------------------------------------------------------
 
 def us_get_nasdaq_tickers() -> list[str]:
     """나스닥 구성종목 티커 리스트 반환.
 
     Source: `FinanceDataReader.StockListing('NASDAQ')`.
     """
-    raise NotImplementedError
+    import FinanceDataReader as fdr
+
+    df = fdr.StockListing("NASDAQ")
+    # 컬럼명은 버전에 따라 'Symbol' 또는 'Ticker' 일 수 있음
+    col = "Symbol" if "Symbol" in df.columns else ("Ticker" if "Ticker" in df.columns else df.columns[0])
+    tickers = df[col].dropna().astype(str).str.strip().str.upper().unique().tolist()
+    return [t for t in tickers if t]
 
 
 def us_get_sp500_tickers() -> list[str]:
@@ -29,8 +110,17 @@ def us_get_sp500_tickers() -> list[str]:
 
     Source: `FinanceDataReader.StockListing('S&P500')`.
     """
-    raise NotImplementedError
+    import FinanceDataReader as fdr
 
+    df = fdr.StockListing("S&P500")
+    col = "Symbol" if "Symbol" in df.columns else ("Ticker" if "Ticker" in df.columns else df.columns[0])
+    tickers = df[col].dropna().astype(str).str.strip().str.upper().unique().tolist()
+    return [t for t in tickers if t]
+
+
+# ---------------------------------------------------------------------------
+# 시세
+# ---------------------------------------------------------------------------
 
 def us_load_prices(ticker: str, days: int) -> pd.DataFrame:
     """단일 종목 일봉 OHLCV (최근 `days` 영업일) 반환.
@@ -41,9 +131,25 @@ def us_load_prices(ticker: str, days: int) -> pd.DataFrame:
 
     Returns:
         index=date, columns=[Open, High, Low, Close, Volume] DataFrame.
-        `auto_adjust=True` 적용 권장 (분할/배당 조정).
+        `auto_adjust=True` 적용 (분할/배당 조정 — RS 계산 오염 방지).
     """
-    raise NotImplementedError
+    import yfinance as yf
+
+    end = datetime.utcnow().date() + timedelta(days=1)
+    start = end - timedelta(days=_calendar_span(days))
+
+    raw = yf.download(
+        ticker,
+        start=start.isoformat(),
+        end=end.isoformat(),
+        auto_adjust=True,
+        progress=False,
+        threads=False,
+    )
+    df = _normalize_ohlcv(raw)
+    if df.empty:
+        return df
+    return df.tail(days)
 
 
 def us_load_index(index_code: str, days: int) -> pd.DataFrame:
@@ -56,7 +162,39 @@ def us_load_index(index_code: str, days: int) -> pd.DataFrame:
     Returns:
         index=date, columns 포함 `Close`.
     """
-    raise NotImplementedError
+    # 지수도 결국 yfinance 티커 다운로드와 동일
+    return us_load_prices(index_code, days)
+
+
+# ---------------------------------------------------------------------------
+# 메타데이터 & 관리종목
+# ---------------------------------------------------------------------------
+
+def _is_risk_from_info(info: dict) -> bool:
+    """MVP 수준의 관리/위험 종목 간단 판정.
+
+    - EQUITY 가 아닌 경우 (ETF/MUTUALFUND/WARRANT 등)
+    - market_cap 정보가 아예 없거나 0 (상장 폐지 임박/저품질 티커 가능성)
+    - regularMarketPrice 가 없는 경우
+
+    공시 기반 정교화는 추후 작업.
+    """
+    if not info:
+        return True
+
+    qtype = info.get("quoteType")
+    if qtype and qtype != "EQUITY":
+        return True
+
+    mcap = info.get("marketCap")
+    if mcap is None or mcap == 0:
+        return True
+
+    price = info.get("regularMarketPrice") or info.get("currentPrice")
+    if price is None:
+        return True
+
+    return False
 
 
 def us_get_meta(ticker: str) -> dict:
@@ -65,7 +203,7 @@ def us_get_meta(ticker: str) -> dict:
     Returns:
         dict 키:
             - name_en (str): 영문명
-            - name_kr (str | None): 한글명 (매핑 테이블 있을 때만)
+            - name_kr (str | None): 한글명 (매핑 테이블 있을 때만 — MVP 단계에선 None)
             - sector (str | None)
             - country (str | None)
             - exchange (str | None)
@@ -73,4 +211,35 @@ def us_get_meta(ticker: str) -> dict:
             - is_china (bool)
             - is_risk (bool)
     """
-    raise NotImplementedError
+    import yfinance as yf
+
+    info: dict = {}
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception:
+        info = {}
+
+    name_en = (
+        info.get("longName")
+        or info.get("shortName")
+        or info.get("displayName")
+        or ticker
+    )
+    sector = info.get("sector")
+    country = info.get("country")
+    exchange = info.get("exchange") or info.get("fullExchangeName")
+    market_cap = info.get("marketCap")
+
+    meta: dict = {
+        "name_en": name_en,
+        "name_kr": us_get_kr_name(ticker),
+        "sector": sector,
+        "country": country,
+        "exchange": exchange,
+        "market_cap": market_cap,
+        "is_china": False,
+        "is_risk": False,
+    }
+    meta["is_china"] = is_china_ticker(ticker, meta=meta)
+    meta["is_risk"] = _is_risk_from_info(info)
+    return meta
