@@ -1,0 +1,26 @@
+# Data cache
+screening_cache.db
+*.parquet
+cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# Secrets
+.env
+.streamlit/secrets.toml
+*.key
+api_keys.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
