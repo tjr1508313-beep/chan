@@ -16,22 +16,30 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from .batch import screen_refresh_index, screen_refresh_meta, screen_refresh_prices
-from .cache import cache_load_prices
+from .cache import cache_load_index, cache_load_prices
 from .core import screen_apply_filters, screen_build_screening_df, screen_rank_rs
 from .data import us_get_nasdaq_tickers, us_get_sp500_tickers
-from .theme import COLOR_BG, COLOR_LOSS, COLOR_MUTED, COLOR_PROFIT, COLOR_TEXT
+from .theme import (
+    COLOR_BORDER,
+    COLOR_CARD,
+    COLOR_LOSS,
+    COLOR_MUTED,
+    COLOR_PROFIT,
+    COLOR_TEXT,
+)
 
 
 # ─── 차트 색상 (나중에 theme.py 로 이관 예정) ────────────────────────────
 # 한국식 색상 체계: 상승=빨강, 하락=파랑
 _COLOR_UP = COLOR_PROFIT       # #ff4b4b
 _COLOR_DOWN = COLOR_LOSS        # #1a9cff
-_COLOR_MA = "#ffa726"           # 5일 이평선 (주황)
-_COLOR_ATR = "#8b80f9"          # 9일 ATR (보라)
-_COLOR_ATR_FILL = "rgba(139, 128, 249, 0.18)"  # ATR 음영
+_COLOR_MA = "#ff9500"           # 5일 이평선 (주황) — 라이트 배경에 대비 강화
+_COLOR_ATR = "#6366f1"          # 9일 ATR (인디고)
+_COLOR_ATR_FILL = "rgba(99, 102, 241, 0.15)"  # ATR 음영
 
 
 # ─── session_state 키 상수 (접두사 일관성) ────────────────────────────
+KEY_ASSET_CLASS = "scr_asset_class"
 KEY_SELECTED_INDEX = "scr_selected_index"
 KEY_RS_PERIOD = "scr_rs_period"
 KEY_TOP_N = "scr_top_n"
@@ -107,20 +115,73 @@ def ui_load_ranked_df(
 
 # ─── 렌더링 헬퍼 ────────────────────────────────────────────────────
 
+_INDEX_DISPLAY = {
+    "^IXIC": "나스닥",
+    "^GSPC": "S&P 500",
+    "^DJI": "다우",
+}
+
+
+def _index_display_name(index_code: str) -> str:
+    """지수 코드를 사용자 친화 이름으로 변환. 매핑 없으면 원본 반환."""
+    return _INDEX_DISPLAY.get(index_code, index_code)
+
+
+def render_asset_selector() -> str:
+    """사이드바 최상단의 자산군 선택 UI.
+
+    Returns: `"us"` / `"kr"` / `"crypto"` 중 하나.
+
+    Streamlit 1.34+ 의 `st.pills` 사용. 선택 상태는 `scr_asset_class` 에 저장.
+    """
+    with st.sidebar:
+        st.markdown("#### 주식 스크리닝")
+        st.caption("상대강도(RS) 기반 종목 발굴")
+
+        options = ["미국주식", "한국주식", "코인"]
+        labels_to_code = {"미국주식": "us", "한국주식": "kr", "코인": "crypto"}
+
+        # 세션 기본값
+        current_label = st.session_state.get(
+            f"{KEY_ASSET_CLASS}_label", "미국주식"
+        )
+
+        selected = st.pills(
+            "자산군",
+            options=options,
+            default=current_label,
+            label_visibility="collapsed",
+            key=f"{KEY_ASSET_CLASS}_label",
+        )
+        # 선택 해제 방지
+        if selected is None:
+            selected = current_label
+
+        code = labels_to_code.get(selected, "us")
+        st.session_state[KEY_ASSET_CLASS] = code
+        st.divider()
+        return code
+
+
 def _render_sidebar() -> tuple[str, int, int, int, dict]:
     """사이드바 렌더링 → (index_code, rs_period, top_n, refresh_limit, filter_config)."""
     with st.sidebar:
-        st.subheader("미국주식 설정")
+        st.markdown("##### 미국주식 설정")
 
         index_options = {
-            "나스닥 (^IXIC)": "^IXIC",
-            "S&P 500 (^GSPC)": "^GSPC",
+            "나스닥": "^IXIC",
+            "S&P 500": "^GSPC",
         }
         selected_index_label = st.selectbox(
             "지수 선택",
             options=list(index_options.keys()),
             index=0,
             key=KEY_SELECTED_INDEX,
+            help=(
+                "RS 계산의 기준 지수. "
+                "나스닥 = Yahoo Finance `^IXIC`, "
+                "S&P 500 = `^GSPC`."
+            ),
         )
         index_code = index_options[selected_index_label]
 
@@ -135,37 +196,50 @@ def _render_sidebar() -> tuple[str, int, int, int, dict]:
         )
 
         top_n = st.slider(
-            "Top N",
+            "표시 개수 (Top N)",
             min_value=10,
             max_value=50,
             value=20,
             step=5,
             key=KEY_TOP_N,
+            help="랭킹 테이블에 표시할 상위 종목 수.",
         )
 
-        st.caption(f"지수 코드: `{index_code}`")
+        # 지수 캐시 상태를 작게 표시
+        idx_cache = cache_load_index(index_code, days=5)
+        idx_cached = idx_cache is not None and not idx_cache.empty
+        badge_color = "#1a9cff" if idx_cached else "#ff9500"
+        badge_text = "데이터 준비됨" if idx_cached else "데이터 없음"
+        st.markdown(
+            f"<div style='font-size:0.78rem; color:{COLOR_MUTED}; margin-top:-4px;'>"
+            f"지수 상태: <span style='color:{badge_color}; font-weight:600;'>"
+            f"{badge_text}</span></div>",
+            unsafe_allow_html=True,
+        )
 
-        # ─── 캐시 새로고침 ───
+        # ─── 데이터 새로고침 ───
         st.divider()
-        st.subheader("캐시 새로고침")
+        st.markdown("##### 데이터 새로고침")
         refresh_limit = st.number_input(
-            "이번 새로고침 대상 종목 수 제한",
+            "이번에 받을 종목 수",
             min_value=10,
             max_value=4000,
             value=200,
             step=50,
             key=KEY_REFRESH_LIMIT,
             help=(
-                "yfinance 풀배치는 수십 분 걸림. "
-                "테스트/점진 확장용으로 티커 수를 제한."
+                "yfinance 에서 한 번에 받아올 종목 수. "
+                "나스닥 전체(3800+)는 30분 이상 걸림. "
+                "테스트/점진 확장용으로 제한 가능."
             ),
         )
         refresh_clicked = st.button(
-            "현재 지수 캐시 새로고침",
+            "yfinance에서 내려받기",
             use_container_width=True,
             help=(
                 "지수 + 선두 N개 구성종목의 시세/메타를 yfinance 에서 내려받아 "
-                "SQLite 캐시에 저장합니다. 매우 느립니다."
+                "로컬 SQLite 에 저장합니다. 앱은 이 DB만 읽으므로 최신 시세를 "
+                "반영하려면 이 버튼을 눌러야 합니다."
             ),
         )
         if refresh_clicked:
@@ -421,7 +495,7 @@ def _us_render_chart(ticker: str, lookback_days: int = 120) -> None:
         st.warning(
             f"**{ticker}** 차트를 그릴 데이터가 부족합니다 "
             f"(현재 {0 if df is None else len(df)}행, 15행 이상 필요). "
-            "사이드바의 **[현재 지수 캐시 새로고침]** 을 실행해주세요."
+            "사이드바의 **[yfinance에서 내려받기]** 을 실행해주세요."
         )
         return
 
@@ -503,8 +577,8 @@ def _us_render_chart(ticker: str, lookback_days: int = 120) -> None:
         title=dict(text=title, x=0.01, xanchor="left", font=dict(size=15, color=COLOR_TEXT)),
         height=620,
         margin=dict(l=10, r=10, t=50, b=10),
-        paper_bgcolor=COLOR_BG,
-        plot_bgcolor=COLOR_BG,
+        paper_bgcolor=COLOR_CARD,
+        plot_bgcolor=COLOR_CARD,
         font=dict(color=COLOR_TEXT),
         xaxis=dict(rangeslider=dict(visible=False), rangebreaks=rangebreaks),
         xaxis2=dict(rangebreaks=rangebreaks),
@@ -520,10 +594,16 @@ def _us_render_chart(ticker: str, lookback_days: int = 120) -> None:
         hovermode="x unified",
     )
 
-    # 축 스타일
-    grid_color = "rgba(255,255,255,0.06)"
-    fig.update_xaxes(showgrid=True, gridcolor=grid_color, zeroline=False)
-    fig.update_yaxes(showgrid=True, gridcolor=grid_color, zeroline=False)
+    # 축 스타일 (라이트 테마용 — 연한 회색 격자)
+    grid_color = COLOR_BORDER
+    fig.update_xaxes(
+        showgrid=True, gridcolor=grid_color, zeroline=False,
+        tickfont=dict(color=COLOR_MUTED), linecolor=COLOR_BORDER,
+    )
+    fig.update_yaxes(
+        showgrid=True, gridcolor=grid_color, zeroline=False,
+        linecolor=COLOR_BORDER,
+    )
     fig.update_yaxes(title_text="Price ($)", row=1, col=1, tickfont=dict(color=COLOR_MUTED))
     fig.update_yaxes(title_text="ATR", row=2, col=1, tickfont=dict(color=COLOR_MUTED))
 
@@ -593,6 +673,7 @@ def render_us_tab() -> None:
     col_left, col_right = st.columns([1.2, 1], gap="large")
 
     with col_left:
+        index_display = _index_display_name(index_code)
         header_cols = st.columns([2, 1])
         with header_cols[0]:
             st.markdown(f"### RS Top {top_n}")
@@ -603,7 +684,8 @@ def render_us_tab() -> None:
                 st.markdown(
                     f"<div style='text-align:right; color:{color}; "
                     f"font-weight:600; padding-top:8px;'>"
-                    f"지수 {rs_period}일 수익률: {sign}{idx_return*100:.2f}%"
+                    f"{index_display} {rs_period}일 수익률: "
+                    f"{sign}{idx_return*100:.2f}%"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -614,9 +696,9 @@ def render_us_tab() -> None:
         # ─── 빈 상태 분기 ───
         if stats.get("total", 0) == 0 or not tickers:
             st.warning(
-                "캐시 데이터가 비어있거나 구성종목 리스트가 없습니다. "
-                "사이드바의 **[현재 지수 캐시 새로고침]** 버튼을 눌러 "
-                "데이터를 채워주세요."
+                f"**{index_display}** 구성종목 데이터가 캐시에 없습니다. "
+                "사이드바의 **[yfinance에서 내려받기]** 버튼을 눌러 "
+                "데이터를 먼저 받아주세요."
             )
             return
 
@@ -628,11 +710,19 @@ def render_us_tab() -> None:
             return
 
         if ranked.empty:
-            # final > 0 인데 ranked 가 비었다 = 지수 수익률 0 근처
-            st.warning(
-                f"지수({index_code}) {rs_period}일 변동폭이 너무 작아 "
-                "RS 계산이 불가합니다. 기간을 늘려보세요."
-            )
+            # final > 0 인데 ranked 가 비었다 = 지수 데이터 부재 or 지수 flat
+            idx_cache = cache_load_index(index_code, days=rs_period + 10)
+            if idx_cache is None or idx_cache.empty or len(idx_cache) < rs_period + 1:
+                st.warning(
+                    f"**{index_display}** 지수 시세가 캐시에 없거나 부족합니다. "
+                    "사이드바에서 이 지수를 선택한 상태로 "
+                    "**[yfinance에서 내려받기]** 를 눌러 지수 데이터를 받아주세요."
+                )
+            else:
+                st.warning(
+                    f"{index_display} {rs_period}일 변동폭이 너무 작아 "
+                    "RS 계산이 불가합니다. 기간을 늘려보세요."
+                )
             return
 
         # ─── 지수 수익률 음수 경고 ───

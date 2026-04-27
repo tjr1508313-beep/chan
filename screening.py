@@ -8,6 +8,7 @@ Phase 1 — 미국주식 MVP. 한국주식/코인은 추후 Phase에서 지원.
     - CSS는 `screening.theme.apply_theme()`로 주입
     - 캐시 함수는 `us_` / `screen_` 접두사
 
+자산군 탭은 **사이드바**에서 선택 (상단 탭 제거).
 통합 시 이 파일(`screening.py`)은 폐기되고 `screening/` 패키지만 매매일지 앱에
 탭으로 붙일 예정.
 """
@@ -15,7 +16,12 @@ Phase 1 — 미국주식 MVP. 한국주식/코인은 추후 Phase에서 지원.
 import streamlit as st
 
 from screening.theme import apply_theme
-from screening.ui import render_crypto_tab, render_kr_tab, render_us_tab
+from screening.ui import (
+    render_asset_selector,
+    render_crypto_tab,
+    render_kr_tab,
+    render_us_tab,
+)
 
 
 def main() -> None:
@@ -27,20 +33,15 @@ def main() -> None:
     )
     apply_theme()
 
-    st.title("주식 스크리닝")
-    st.caption("상대강도(RS) 기반 종목 발굴 도구")
+    # ─── 사이드바 자산군 선택 ───
+    asset_class = render_asset_selector()
 
-    tab_us, tab_kr, tab_crypto = st.tabs(
-        ["🇺🇸 미국주식", "🇰🇷 한국주식", "🪙 코인"]
-    )
-
-    with tab_us:
+    # ─── 본문: 선택된 자산군에 따라 분기 ───
+    if asset_class == "us":
         render_us_tab()
-
-    with tab_kr:
+    elif asset_class == "kr":
         render_kr_tab()
-
-    with tab_crypto:
+    elif asset_class == "crypto":
         render_crypto_tab()
 
 

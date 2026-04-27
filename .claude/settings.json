@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -X utf8 -c \"import json,sys,subprocess; d=json.load(sys.stdin); f=d.get('tool_input',{}).get('file_path',''); exit(2) if f.endswith('.py') and subprocess.run([sys.executable,'-X','utf8','-m','py_compile',f]).returncode else None\"",
+            "timeout": 15,
+            "statusMessage": "py_compile 검사 중..."
+          }
+        ]
+      }
+    ]
+  }
+}

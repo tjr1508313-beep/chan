@@ -1,5 +1,5 @@
 @echo off
 cd /d "%~dp0"
-start cmd /k "streamlit run screening.py"
+start cmd /k "streamlit run screening.py --server.port=8765"
 timeout /t 8 /nobreak > nul
-start http://localhost:8501
+start http://localhost:8765
