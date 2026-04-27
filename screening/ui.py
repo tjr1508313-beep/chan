@@ -235,7 +235,7 @@ def _render_sidebar() -> tuple[str, int, int, int, dict]:
         )
         refresh_clicked = st.button(
             "yfinance에서 내려받기",
-            use_container_width=True,
+            width="stretch",
             help=(
                 "지수 + 선두 N개 구성종목의 시세/메타를 yfinance 에서 내려받아 "
                 "로컬 SQLite 에 저장합니다. 앱은 이 DB만 읽으므로 최신 시세를 "
@@ -400,7 +400,7 @@ def _render_ranking_table(
     event = st.dataframe(
         display,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         height=min(600, 45 + 35 * len(display)),
         on_select="rerun",
         selection_mode="single-row",
@@ -607,7 +607,7 @@ def _us_render_chart(ticker: str, lookback_days: int = 120) -> None:
     fig.update_yaxes(title_text="Price ($)", row=1, col=1, tickfont=dict(color=COLOR_MUTED))
     fig.update_yaxes(title_text="ATR", row=2, col=1, tickfont=dict(color=COLOR_MUTED))
 
-    st.plotly_chart(fig, use_container_width=True, theme=None)
+    st.plotly_chart(fig, width="stretch", theme=None)
 
     # ─── 하단 미니 요약 ───
     _render_chart_metrics(df, atr9)
