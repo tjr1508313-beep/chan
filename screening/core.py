@@ -47,6 +47,7 @@ _SCREEN_DF_COLUMNS = [
     "last_price",
     "avg_dollar_volume_20d",
     "max_daily_range_20d",
+    "market_cap",
     "is_china",
     "is_risk",
     "name_en",
@@ -141,12 +142,20 @@ def screen_build_screening_df(
 
         is_risk = bool(meta.get("is_risk")) if meta.get("is_risk") is not None else False
 
+        market_cap = meta.get("market_cap")
+        if market_cap is not None:
+            try:
+                market_cap = float(market_cap)
+            except (TypeError, ValueError):
+                market_cap = None
+
         rows.append(
             {
                 "ticker": t,
                 "last_price": last_price,
                 "avg_dollar_volume_20d": avg_dv,
                 "max_daily_range_20d": max_rng,
+                "market_cap": market_cap,
                 "is_china": is_china,
                 "is_risk": is_risk,
                 "name_en": meta.get("name_en"),
@@ -172,6 +181,7 @@ def _default_config() -> dict:
     return {
         "min_price": 10.0,
         "min_dollar_volume": 20_000_000.0,
+        "min_market_cap": 0.0,           # 0 = 미적용. 한국주식은 3,000억(3e11) 권장
         "max_daily_range_pct": 0.50,
         "lookback_days": 20,
         "exclude_china": True,
@@ -209,7 +219,7 @@ def screen_apply_filters(
     stats: dict[str, int] = {"total": int(len(df))}
 
     if df is None or df.empty:
-        for key in ("after_price", "after_volume", "after_risk", "after_china", "after_volatility", "final"):
+        for key in ("after_price", "after_volume", "after_market_cap", "after_risk", "after_china", "after_volatility", "final"):
             stats[key] = 0
         return df.iloc[0:0].copy() if df is not None else pd.DataFrame(columns=_SCREEN_DF_COLUMNS), stats
 
@@ -225,7 +235,14 @@ def screen_apply_filters(
     current = current[mask_vol]
     stats["after_volume"] = int(len(current))
 
-    # 3) 관리/위험종목
+    # 3) 시가총액 (min_market_cap > 0 일 때만 적용)
+    min_mc = float(cfg.get("min_market_cap", 0.0))
+    if min_mc > 0 and "market_cap" in current.columns:
+        mask_mc = current["market_cap"].fillna(-1.0) >= min_mc
+        current = current[mask_mc]
+    stats["after_market_cap"] = int(len(current))
+
+    # 4) 관리/위험종목
     if cfg.get("exclude_risk", True):
         # is_risk True 인 종목 제외, NaN/None 은 포함(보수적으로 통과)
         risk_flag = current["is_risk"].fillna(False).astype(bool)

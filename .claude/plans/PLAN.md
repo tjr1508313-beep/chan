@@ -77,13 +77,57 @@
 
 ---
 
-## Phase 2: 한국주식 확장 (초안)
-- 코스피/코스닥 대비 RS
-- pykrx 또는 FDR (`StockListing('KRX')`)로 종목 리스트 확보
-- 거래대금은 원화 원본 사용 가능
-- 관리종목/투자주의 → KRX 공시 기반 필터
-- 에이전트 신설: `한국주식 데이터 API`
-- 기존 백엔드/프론트는 공통 로직 그대로 활용
+## Phase 2: 한국주식 확장 (착수 — 2026-04-28)
+
+### 확정 결정 사항
+- **데이터 소스**: **FDR 단일** (`StockListing`, `DataReader`)
+  - pykrx 는 KRX 익명 접근 차단으로 **제외** (KRX_ID/PW 환경변수 필요해 MVP 부담)
+- **지수**: KOSPI = `KS11`, KOSDAQ = `KQ11`
+- **거래대금 계산**: `Close × Volume` (FDR 일봉에 Amount 컬럼 없음 — 미국과 동일 방식)
+- **거래대금 필터 기준**: **300억 원 이상**
+- **한글 종목명**: FDR `StockListing` 의 `Name` 컬럼이 이미 한글 — 별도 매핑 불필요
+- **티커 형식**: 6자리 숫자 (예: `005930`) — 미국 영문 티커와 자연 분리, 같은 DB 테이블 공유
+- **캐시 DB**: 같은 `screening_cache.db` (`prices`, `metadata`, `index_prices` 테이블 공유)
+
+### 보류 (Phase 2 본 트랙에서 분리)
+- **관리종목/투자주의 필터** — 가장 깔끔한 출처(pykrx)가 막혀 별도 KRX 공시 크롤러 필요.
+  관리종목은 거래대금이 적어 300억 원 필터에서 대부분 자연 탈락. 사용자 사용 후 필요시 별도 모듈로 추가.
+
+### 작업 순서
+- [x] 2.1 의존성 — `pykrx>=1.0.45` 추가 (옵션 — KRX 인증 셋업 시 활용 가능, 미사용 시 무해). FDR 은 기존 유지.
+- [x] 2.2 새 에이전트 정의 `.claude/agents/agent5-kr-data.md`
+- [x] 2.3 `screening/data_kr.py` — `kr_get_kospi_tickers`, `kr_get_kosdaq_tickers`,
+  `kr_load_prices`, `kr_load_index`, `kr_get_meta` (StockListing 프로세스 캐싱)
+- [x] 2.4 `screening/batch_kr.py` — 미국 `batch.py` 와 대칭 별도 파일.
+  `screen_refresh_prices_kr/_meta_kr/_index_kr` 제공.
+- [x] 2.5 `core.py` 검증 — **수정 0줄**로 KR 데이터에서 동작 확인.
+  스모크 테스트: 5 KOSPI 종목 + KS11, 20일 RS → SK하이닉스 1위 RS 1.893, 삼성전자우 2위 RS 1.270.
+- [x] 2.6 `render_kr_tab()` 본격 구현 (`screening/ui.py`):
+  - `_render_sidebar_kr()` (코스피/코스닥, 최소 주가/거래대금 원화, 관리종목 보류 안내)
+  - `_run_refresh_kr()` (FDR 기반 새로고침 — 지수/시세/메타)
+  - `_render_ranking_table_kr()` (₩ 표기 현재가, 거래대금 단위 억원)
+  - `_kr_render_chart()` + `_render_chart_metrics_kr()` (₩ 표기 캔들 + 5MA + 9ATR)
+  - session_state 키 분리: `scr_kr_*` (미국 사이드바와 독립)
+  - `ui_load_index_tickers()` 에 KS11/KQ11 분기 추가
+  - `_INDEX_DISPLAY` 에 코스피/코스닥 추가
+- [x] 2.7 사용자 결정 추가 필터 (2026-04-28)
+  - 모집단 정적 제외: **우선주 + 리츠 + ETF + 스팩 + 외국기업** (`data_kr._apply_universe_filter`)
+    - KOSPI 949 → 812, KOSDAQ 1,821 → 1,722
+  - 시가총액 ≥ **3,000억 원** (`core.py` 에 `min_market_cap` 신규 단계 + UI 슬라이더)
+    - 코스피 ~425, 코스닥 ~404 종목까지 좁아짐 (3000억 기준)
+  - 위험종목 제외 체크박스 노출 (UI 적용 완료, 데이터 소스는 별도 작업)
+- [ ] 2.8 사용자 실행 테스트 (사이드바 → 한국주식 → 데이터 새로고침 → RS 랭킹 → 차트)
+- [ ] 2.9 한국 시장 휴장일/시간대 미반영 부분 점검 (FDR 자체가 영업일만 반환하므로 큰 이슈 없을 것으로 예상)
+- [ ] 2.10 (보류) 관리종목 필터 데이터 소스 확보
+  - **KRX 정보데이터시스템 익명 호출 차단 확인** (응답: `LOGOUT`)
+  - **pykrx 1.2.7 에 admin/warning 함수 없음** 확인
+  - 옵션: (a) KRX 회원 ID/PW 셋업, (b) DART API 키, (c) 네이버 스크래핑(약관 회색), (d) 보류
+  - 현재는 (d) 보류 — 시가총액 3,000억 + 거래대금 300억 + 변동성 필터로 위험종목 자연 탈락 의존
+
+### Phase 2 잔여 의사결정 (Phase 1 완료 후 검토)
+- 거래대금 컬럼명 `dollar_volume` 이 한국에서 의미상 어색 — 향후 `traded_value` 등으로 일반화 검토
+- 차트 함수의 미국/한국 중복은 추후 `_render_chart_panel(currency_symbol, price_format, ...)` 일반화 검토
+  (현재는 `_us_render_chart` / `_kr_render_chart` 별도)
 
 ## Phase 3: 코인 확장 (초안)
 - BTC 또는 시장 전체(총 시가총액) 대비 RS
@@ -104,8 +148,9 @@
 - [x] **RS 공식**: 단순 비율 방식 — `RS = (종목 N일 수익률) / (지수 N일 수익률)`
   - 기본 기간 20일, 사이드바 슬라이더로 5~60일 조정 가능
   - Phase 1 완료 후 블로그(best-n-optimal) 재확인 시 가중 합산으로 변경 가능
-- [x] **거래대금 기준**: **$20M 이상** (달러 고정 기준)
-  - 한국주식 Phase 2에서는 원화 300억 원 기준 적용
+- [x] **거래대금 기준**:
+  - 미국주식: **$20M 이상** (달러 고정)
+  - 한국주식: **300억 원 이상** (원화 고정 — Phase 2)
 - [x] **한글 종목명**: MVP는 영문명만, Phase 1 최종 단계에서 Top 200 수동 CSV 매핑
 - [x] **데이터 캐시**: SQLite (`screening_cache.db`)
 - [x] **데이터 소스**: yfinance(시세/지수/메타) + FinanceDataReader(종목 리스트)

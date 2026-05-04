@@ -251,6 +251,18 @@ def cache_get_last_price_date(ticker: str) -> str | None:
     return str(row[0])
 
 
+def cache_get_all_last_price_dates() -> dict[str, str]:
+    """모든 티커 → 마지막 저장일(`YYYY-MM-DD`) 딕셔너리.
+
+    배치 새로고침에서 'stale 우선' 정렬용. 한 번의 SQL로 모든 티커 일괄 조회.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ticker, MAX(date) FROM prices GROUP BY ticker"
+        ).fetchall()
+    return {str(t): str(d) for t, d in rows if d is not None}
+
+
 # ---------------------------------------------------------------------------
 # 메타데이터
 # ---------------------------------------------------------------------------
