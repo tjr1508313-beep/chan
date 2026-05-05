@@ -119,6 +119,11 @@
 - [ ] 2.8 사용자 실행 테스트 (사이드바 → 한국주식 → 데이터 새로고침 → RS 랭킹 → 차트)
 - [ ] 2.9 한국 시장 휴장일/시간대 미반영 부분 점검 (FDR 자체가 영업일만 반환하므로 큰 이슈 없을 것으로 예상)
 - [ ] 2.10 (보류) 관리종목 필터 데이터 소스 확보
+- [x] 2.11 RS 시간 정합성 영구 보장 (2026-05-06)
+  - `core.py: screen_filter_by_index_lag(tickers, index_code, max_lag_days=0)` 신설
+  - 종목 캐시 마지막일이 지수 마지막일보다 0일 초과로 뒤처지면 ranking 단계 진입 전 제외
+  - `ui.py: ui_load_ranked_df` 흐름에 끼워넣어 `stats['lag_excluded']` / `stats['after_lag']` 추가
+  - `_render_pipeline_badge` 에 `lag_excluded > 0` 일 때만 "지연 -N" 표시
   - **KRX 정보데이터시스템 익명 호출 차단 확인** (응답: `LOGOUT`)
   - **pykrx 1.2.7 에 admin/warning 함수 없음** 확인
   - 옵션: (a) KRX 회원 ID/PW 셋업, (b) DART API 키, (c) 네이버 스크래핑(약관 회색), (d) 보류

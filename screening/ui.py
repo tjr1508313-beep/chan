@@ -29,7 +29,12 @@ from .cache import (
     cache_load_index,
     cache_load_prices,
 )
-from .core import screen_apply_filters, screen_build_screening_df, screen_rank_rs
+from .core import (
+    screen_apply_filters,
+    screen_build_screening_df,
+    screen_filter_by_index_lag,
+    screen_rank_rs,
+)
 from .data import us_get_nasdaq_tickers, us_get_sp500_tickers
 from .data_kr import kr_get_kosdaq_tickers, kr_get_kospi_tickers
 from .theme import (
@@ -93,12 +98,17 @@ def ui_load_ranked_df(
     df = screen_build_screening_df(tickers, lookback_days=20)
     filtered, stats = screen_apply_filters(df, filter_config)
 
-    if filtered.empty:
+    # 7) RS 시간 정합성 — 종목 마지막일이 지수와 0일 초과 어긋나면 제외
+    passing, lag_excluded = screen_filter_by_index_lag(
+        filtered.index.tolist(), index_code, max_lag_days=0
+    )
+    stats["lag_excluded"] = int(lag_excluded)
+    stats["after_lag"] = int(len(passing))
+
+    if not passing:
         return pd.DataFrame(), stats
 
-    ranked = screen_rank_rs(
-        filtered.index.tolist(), index_code, period=rs_period, top_n=top_n
-    )
+    ranked = screen_rank_rs(passing, index_code, period=rs_period, top_n=top_n)
     if not ranked.empty:
         meta_cols = filtered[["name_en", "name_kr", "avg_dollar_volume_20d", "market_cap"]]
         ranked = ranked.merge(meta_cols, left_on="ticker", right_index=True, how="left")
@@ -603,8 +613,11 @@ def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
         f"관리 {stats.get('after_risk', 0)}",
         f"중국 {stats.get('after_china', 0)}",
         f"변동성 {stats.get('after_volatility', 0)}",
-        f"Top {ranked_len}",
     ])
+    lag_excluded = stats.get("lag_excluded", 0)
+    if lag_excluded:
+        parts.append(f"지연 -{lag_excluded}")
+    parts.append(f"Top {ranked_len}")
     st.caption(" → ".join(parts))
 
 

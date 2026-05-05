@@ -1,7 +1,7 @@
 # 스크리닝 프로젝트 메모리
 
-> Phase 2 (한국주식) 본격 구현 직후 스냅샷 — 2026-05-04 기준.
-> Phase 1 (미국주식) 은 완료, Phase 2.1~2.7 완료, 2.8(사용자 실행 테스트) 진행 중.
+> RS 시간 정합성 보장 추가 직후 스냅샷 — 2026-05-06 기준.
+> Phase 1 (미국주식) 완료, Phase 2.1~2.7 + 2.11 완료, 2.8(사용자 실행 테스트) 진행 중.
 
 ## 프로젝트 구조
 ```
@@ -71,6 +71,7 @@ C:\스크리닝\
 - `screen_build_screening_df(tickers, lookback_days=20)` — 캐시 집계 wide DF (market_cap 컬럼 포함)
 - `screen_apply_filters(df, config) -> (df, stats)` — 6종 필터, 순서: price→volume→**market_cap**→risk→china→volatility
   - `min_market_cap`: 0=미적용 / 한국 권장 3e11(3,000억 원)
+- `screen_filter_by_index_lag(tickers, index_code, max_lag_days=0) -> (passing, excluded)` — RS 시간 정합성 보장. 종목 캐시 마지막일이 지수보다 N일 초과 뒤처지면 제외 (2026-05-06 추가)
 - `screen_calc_rs(prices, index_prices, period=20)` — 단일/wide 지원
 - `screen_rank_rs(tickers, index_code, period=20, top_n=20) -> DataFrame`
 
@@ -110,18 +111,18 @@ C:\스크리닝\
 3. **장중 호출 시 당일 미완성 봉** — 변동성 필터 오작동 가능. 배치는 장 마감 후 권장
 4. **한국 위험종목 필터 보류** — KRX 공시 익명 차단, pykrx 인증 필요, DART API 키 미설정. 사이드바 체크박스만 살아있음 (실제 적용 안 됨)
 5. **한국 corporate action 자동 감지 미구현** — 분할/spin-off 발생 시 사용자가 force 수동 또는 stale-first 정렬에 의지
-6. **종목/지수 마지막일 미스매치 시 RS 시간 정합성 잃음** — 자동 제외 로직 미구현 (다음 작업 후보 1순위)
+6. ~~**종목/지수 마지막일 미스매치 시 RS 시간 정합성 잃음**~~ — `screen_filter_by_index_lag` 로 해결됨 (2026-05-06)
 7. **`dollar_volume` 컬럼명 한국에서 의미 어색** — 실제로는 원화 거래대금. Phase 4 통합 시 `traded_value` 등으로 일반화 검토
 8. **차트 함수 미국/한국 중복** — `_us_render_chart` / `_kr_render_chart` 별도. 통화 단위만 다름. 추후 `_render_chart_panel(currency_symbol, price_format, dv_unit)` 일반화 후보
 9. **한글 종목명** (미국) — 69종 시드, 필요 시 `data/us_ticker_kr.csv`에 추가
 10. **Streamlit removeChild 워닝** — column 구조 hot reload 시 발생. Ctrl+Shift+R 로 해결
 11. **장중 실시간 조회 미지원** — 일 1회 배치만
 
-## 다음 작업 후보 (커밋 80e758b 기준)
-1. **Ranking 시 마지막일이 지수보다 N일 이상 뒤처진 종목 자동 제외** — RS 시간 정합성 영구 보장
-2. **corporate action 자동 감지** (yfinance Ticker.splits 비교) → 분할 발생 종목 자동 force fetch
-3. **차트 함수 `_render_chart_panel` 일반화** (currency_symbol, price_format, dv_unit 인자화)
-4. **위험종목 데이터 소스 결정** — KRX 회원 ID/PW 또는 DART API 키 셋업 후 `kr_risk.py` 추가
+## 다음 작업 후보 (2026-05-06 갱신)
+1. **corporate action 자동 감지** (yfinance Ticker.splits 비교) → 분할 발생 종목 자동 force fetch
+2. **차트 함수 `_render_chart_panel` 일반화** (currency_symbol, price_format, dv_unit 인자화)
+3. **위험종목 데이터 소스 결정** — KRX 회원 ID/PW 또는 DART API 키 셋업 후 `kr_risk.py` 추가
+4. **`max_lag_days` 사이드바 슬라이더 노출** — 현재 0 하드코딩, 사용자가 너무 엄격하다 느끼면 1~5 조정 가능하게
 5. **Phase 2 며칠 사용 후 피드백 모아 → Phase 3 코인 착수**
 
 ## 테스트 상태

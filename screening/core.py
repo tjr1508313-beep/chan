@@ -32,7 +32,13 @@ from typing import Iterable
 
 import pandas as pd
 
-from .cache import cache_load_index, cache_load_meta, cache_load_prices
+from .cache import (
+    cache_get_all_last_price_dates,
+    cache_get_last_index_date,
+    cache_load_index,
+    cache_load_meta,
+    cache_load_prices,
+)
 from .china_filter import is_china_ticker
 
 
@@ -340,6 +346,62 @@ def screen_calc_rs(
         else:
             rs_map[str(col)] = stock_return / idx_return
     return pd.Series(rs_map, dtype=float)
+
+
+# ---------------------------------------------------------------------------
+# RS 시간 정합성 — 종목 마지막일이 지수보다 뒤처진 경우 제외
+# ---------------------------------------------------------------------------
+
+def screen_filter_by_index_lag(
+    tickers: Iterable[str],
+    index_code: str,
+    max_lag_days: int = 0,
+) -> tuple[list[str], int]:
+    """종목 캐시 마지막일이 지수 마지막일과 `max_lag_days` 초과로 떨어진 티커 제외.
+
+    RS = (종목 N일 수익률) / (지수 N일 수익률) 은 두 시계열이 같은 시점을
+    바라볼 때만 의미가 있다. 종목 데이터가 지수보다 뒤처져 있으면 분자/분모의
+    기준일이 어긋나 RS 가 시간 정합성을 잃는다. 이 함수는 그런 종목을 사전 제거.
+
+    Args:
+        tickers: 검사 대상 티커 리스트.
+        index_code: 기준 지수 코드.
+        max_lag_days: 허용 캘린더 일수 차이. 기본 0 (완전 일치).
+
+    Returns:
+        (passing, excluded). passing 은 통과한 티커 리스트, excluded 는 제외 카운트.
+
+        지수 캐시 자체가 비어 있으면 lag 체크 불가 → 모두 통과 (excluded=0).
+    """
+    index_last = cache_get_last_index_date(index_code)
+    tickers_list = [str(t).strip() for t in tickers if t]
+    if index_last is None:
+        return tickers_list, 0
+
+    last_dates = cache_get_all_last_price_dates()
+    try:
+        index_dt = pd.Timestamp(index_last)
+    except (ValueError, TypeError):
+        return tickers_list, 0
+
+    passing: list[str] = []
+    excluded = 0
+    for t in tickers_list:
+        # cache 는 ticker 를 .upper() 로 저장하지만 한국 6자리 코드는 .upper() 무관.
+        last = last_dates.get(t) or last_dates.get(t.upper())
+        if last is None:
+            excluded += 1
+            continue
+        try:
+            diff = (index_dt - pd.Timestamp(last)).days
+        except (ValueError, TypeError):
+            excluded += 1
+            continue
+        if diff > max_lag_days:
+            excluded += 1
+            continue
+        passing.append(t)
+    return passing, excluded
 
 
 # ---------------------------------------------------------------------------
