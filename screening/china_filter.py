@@ -69,9 +69,3 @@ def is_china_ticker(ticker: str, meta: dict | None = None) -> bool:
             return True
 
     return False
-
-
-def reload_china_list() -> None:
-    """CSV 변경 후 메모리 캐시를 비움 (개발/운영 중 핫리로드용)."""
-    global _cached_set
-    _cached_set = None

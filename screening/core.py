@@ -10,11 +10,12 @@
     기본 기간 20일, 사용자 조정 가능 (5~60일).
 
 필터 조건 (모두 AND, 순서 고정):
-    1. 주가 >= $10 (최근 종가 기준)
-    2. 20일 평균 거래대금 >= $20M (`dollar_volume` 평균)
-    3. 관리종목/위험종목 제외 (`meta.is_risk == True` 제외)
-    4. 중국기업 제외 (`is_china_ticker` 또는 `meta.is_china`)
-    5. 최근 20일 내 일일 변동폭 50% 이상 이력 있는 종목 제외
+    1. 주가 >= min_price (미국 $10 / 한국 1,000원)
+    2. 20일 평균 거래대금 >= min_dollar_volume (미국 $20M / 한국 300억 원)
+    3. 시가총액 >= min_market_cap (0=미적용 / 한국 권장 3e11)
+    4. 관리종목/위험종목 제외 (`meta.is_risk == True` 제외)
+    5. 중국기업 제외 (`is_china_ticker` 또는 `meta.is_china`) — 미국 한정
+    6. 최근 20일 내 일일 변동폭 50% 이상 이력 있는 종목 제외
        - 변동폭 공식: `(High - Low) / prev_close`
        - "전일 종가 대비 당일 고저 폭" 직관에 부합, prev_close 가 NaN/0 인 행은 제외
 
@@ -183,7 +184,6 @@ def _default_config() -> dict:
         "min_dollar_volume": 20_000_000.0,
         "min_market_cap": 0.0,           # 0 = 미적용. 한국주식은 3,000억(3e11) 권장
         "max_daily_range_pct": 0.50,
-        "lookback_days": 20,
         "exclude_china": True,
         "exclude_risk": True,
     }
@@ -193,7 +193,7 @@ def screen_apply_filters(
     df: pd.DataFrame,
     config: dict | None = None,
 ) -> tuple[pd.DataFrame, dict]:
-    """필터 5종 순차 적용 (주가 → 거래대금 → 관리 → 중국 → 변동성).
+    """필터 6종 순차 적용 (주가 → 거래대금 → 시총 → 관리 → 중국 → 변동성).
 
     Args:
         df: `screen_build_screening_df()` 결과 형태의 wide DataFrame.
@@ -249,13 +249,13 @@ def screen_apply_filters(
         current = current[~risk_flag]
     stats["after_risk"] = int(len(current))
 
-    # 4) 중국기업
+    # 5) 중국기업
     if cfg.get("exclude_china", True):
         china_flag = current["is_china"].fillna(False).astype(bool)
         current = current[~china_flag]
     stats["after_china"] = int(len(current))
 
-    # 5) 변동성 — lookback 내 일일 변동폭 >= max_daily_range_pct 이면 제외
+    # 6) 변동성 — lookback 내 일일 변동폭 >= max_daily_range_pct 이면 제외
     max_rng = float(cfg["max_daily_range_pct"])
     # NaN (데이터 부족) 은 통과시킴
     rng_values = current["max_daily_range_20d"]

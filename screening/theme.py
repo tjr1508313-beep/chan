@@ -98,12 +98,6 @@ section[data-testid="stSidebar"] [data-testid="stPills"] button[aria-pressed="tr
     color: #ffffff !important;
 }}
 
-/* ───── 탑 탭 숨김 (사이드바로 이동했음) ───── */
-/* 필요 시 대비용 — screening.py 에서도 이미 제거 */
-.stTabs [data-baseweb="tab-list"] {{
-    gap: 4px;
-}}
-
 /* ───── 카드/메트릭 ───── */
 div[data-testid="stMetric"] {{
     background-color: {COLOR_CARD};
@@ -213,32 +207,6 @@ div[data-testid="stDataFrame"] [data-testid="stDataFrameResizable"] {{
 /* ───── 구분선 ───── */
 hr {{
     border-color: {COLOR_BORDER};
-}}
-
-/* ───── 커스텀 카드 유틸 (필요시 st.markdown 으로 사용) ───── */
-.scr-card {{
-    background: {COLOR_CARD};
-    border: 1px solid {COLOR_BORDER};
-    border-radius: 10px;
-    padding: 16px 18px;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-    margin-bottom: 12px;
-}}
-.scr-section-title {{
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: {COLOR_TEXT};
-    margin: 0 0 8px 0;
-}}
-.scr-badge {{
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 6px;
-    font-size: 0.78rem;
-    font-weight: 500;
-    background: {COLOR_HOVER};
-    color: {COLOR_MUTED};
-    margin-right: 4px;
 }}
 </style>
 """

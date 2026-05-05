@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -82,9 +82,11 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     wanted = ["Open", "High", "Low", "Close", "Volume"]
     existing = [c for c in wanted if c in df.columns]
     out = df[existing].copy()
-    out.index = pd.to_datetime(out.index).tz_localize(None) if getattr(out.index, "tz", None) else pd.to_datetime(out.index)
-    out = out.sort_index()
-    return out
+    idx = pd.to_datetime(out.index)
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_localize(None)
+    out.index = idx
+    return out.sort_index()
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +137,7 @@ def us_load_prices(ticker: str, days: int) -> pd.DataFrame:
     """
     import yfinance as yf
 
-    end = datetime.utcnow().date() + timedelta(days=1)
+    end = date.today() + timedelta(days=1)
     start = end - timedelta(days=_calendar_span(days))
 
     raw = yf.download(

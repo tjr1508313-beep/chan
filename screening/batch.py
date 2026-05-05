@@ -14,10 +14,8 @@ yfinance 레이트 리밋 대응: 호출 사이 `sleep_sec` 휴식. 기본 0.2s.
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Iterable
-
-import pandas as pd
 
 from . import cache
 from . import data as us_data
@@ -26,10 +24,6 @@ from . import data as us_data
 # ---------------------------------------------------------------------------
 # 내부 유틸
 # ---------------------------------------------------------------------------
-
-def _today_iso() -> str:
-    return date.today().isoformat()
-
 
 def _days_since(date_str: str) -> int:
     """`YYYY-MM-DD` 문자열에서 오늘까지 달력일 차이."""

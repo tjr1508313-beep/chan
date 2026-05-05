@@ -80,11 +80,6 @@ def _get_listing(market: str) -> pd.DataFrame:
     return df
 
 
-def _refresh_listing_cache() -> None:
-    """프로세스 내 listing 캐시 강제 비우기 (테스트/장 마감 후 재로드용)."""
-    _LISTING_CACHE.clear()
-
-
 # ---------------------------------------------------------------------------
 # 종목 리스트 — 모집단 정적 필터
 # ---------------------------------------------------------------------------
@@ -100,60 +95,36 @@ _ETF_KEYWORDS = (
 )
 
 
-def _is_preferred_stock(code: str, name: str) -> bool:
-    """우선주 판정.
-
-    한국 우선주 관행:
-        - 종목코드 끝자리 5 (예: 005935 삼성전자우)
-        - 종목명 끝 '우' / '우A' / '우B' / '우C' / '2우B' 등
-    """
-    if isinstance(code, str) and code.endswith("5"):
-        return True
-    if not isinstance(name, str):
-        return False
-    # '우', '우A'~'우C' 가 끝에 붙는 경우 (e.g., 삼성전자우, LG화학우, CJ제일제당2우B)
-    return bool(re.search(r"우[A-Z]?$", name)) or bool(re.search(r"\d우[A-Z]?$", name))
-
-
-def _is_etf(name: str) -> bool:
-    """ETF/ETN 판정 — 발행사 키워드 매칭."""
-    if not isinstance(name, str):
-        return False
-    upper = name.upper()
-    return any(kw in upper for kw in _ETF_KEYWORDS)
-
-
-def _is_foreign(row: pd.Series) -> bool:
-    """외국기업(중국 포함) 판정.
-
-    1) `Dept` 가 '외국기업' / '외국주' 카테고리
-    2) `ISU_CD` 가 'KR' 로 시작하지 않으면 외국 ISIN
-    """
-    dept = row.get("Dept")
-    if isinstance(dept, str) and ("외국" in dept):
-        return True
-    isu = row.get("ISU_CD")
-    if isinstance(isu, str) and not isu.startswith("KR"):
-        return True
-    return False
+# 우선주 패턴: 이름 끝 '우' / '우A~C' / '2우B' 등
+_PREFERRED_NAME_REGEX = r"\d?우[A-Z]?$"
+# ETF 키워드 OR 정규식 (대소문자 무관 매칭은 .upper() 비교로 처리)
+_ETF_KEYWORDS_REGEX = "|".join(re.escape(kw) for kw in _ETF_KEYWORDS)
 
 
 def _apply_universe_filter(df: pd.DataFrame) -> pd.DataFrame:
     """모집단 정적 필터 — 우선주/리츠/ETF/스팩/외국기업 제거.
 
     시가총액·거래대금·관리종목 등 동적 필터는 `screening.core` 에서 처리.
+    벡터화된 boolean mask 1회 평가 (apply axis=1 호출 0회).
     """
     if df is None or df.empty or "Code" not in df.columns:
         return df
 
     code = df["Code"].astype(str)
     name = df["Name"].fillna("").astype(str)
+    name_upper = name.str.upper()
+    dept = df["Dept"].astype(str) if "Dept" in df.columns else pd.Series("", index=df.index)
+    isu = df["ISU_CD"].astype(str) if "ISU_CD" in df.columns else pd.Series("", index=df.index)
 
-    excl_pref = df.apply(lambda r: _is_preferred_stock(r["Code"], r["Name"]), axis=1)
+    # 우선주: 코드 끝 5 OR 이름 패턴
+    excl_pref = code.str.endswith("5") | name.str.contains(_PREFERRED_NAME_REGEX, regex=True, na=False)
     excl_reit = name.str.contains("리츠", na=False)
     excl_spac = name.str.contains("스팩", na=False)
-    excl_etf = name.apply(_is_etf)
-    excl_foreign = df.apply(_is_foreign, axis=1)
+    excl_etf = name_upper.str.contains(_ETF_KEYWORDS_REGEX, regex=True, na=False)
+    # 외국기업: Dept 에 '외국' OR ISIN 이 KR 로 시작 안 함
+    excl_foreign = dept.str.contains("외국", na=False) | (
+        isu.notna() & ~isu.str.startswith("KR") & (isu != "")
+    )
 
     excluded = excl_pref | excl_reit | excl_spac | excl_etf | excl_foreign
     return df[~excluded].copy()

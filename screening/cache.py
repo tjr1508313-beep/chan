@@ -11,8 +11,6 @@
         PK: ticker
     index_prices (index_code, date, close)
         PK: (index_code, date)
-    settings (key, value)
-        PK: key
 
 이 모듈은 **순수 SQLite 영속 저장소**이다.
     - `streamlit` import 금지 (`@st.cache_data` 는 상위 UI 레이어에서 부착)
@@ -98,13 +96,6 @@ CREATE TABLE IF NOT EXISTS index_prices (
 )
 """
 
-_DDL_SETTINGS = """
-CREATE TABLE IF NOT EXISTS settings (
-    key   TEXT PRIMARY KEY,
-    value TEXT
-)
-"""
-
 _DDL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date)",
     "CREATE INDEX IF NOT EXISTS idx_index_prices_date ON index_prices(date)",
@@ -117,7 +108,6 @@ def init_cache() -> None:
         conn.execute(_DDL_PRICES)
         conn.execute(_DDL_METADATA)
         conn.execute(_DDL_INDEX_PRICES)
-        conn.execute(_DDL_SETTINGS)
         for ddl in _DDL_INDEXES:
             conn.execute(ddl)
 
@@ -160,36 +150,32 @@ def cache_save_prices(ticker: str, df: pd.DataFrame) -> None:
     t = ticker.strip().upper()
     norm = _normalize_date_index(df)
 
-    # 컬럼 방어: 없으면 None
+    # 컬럼 방어: 없으면 NaN. to_numeric 으로 안전 변환 (변환 실패 시 NaN).
     def col(name: str) -> pd.Series:
-        return norm[name] if name in norm.columns else pd.Series([None] * len(norm), index=norm.index)
+        if name not in norm.columns:
+            return pd.Series([float("nan")] * len(norm), index=norm.index, dtype=float)
+        return pd.to_numeric(norm[name], errors="coerce")
 
     close = col("Close")
     volume = col("Volume")
-    dollar_volume = close.astype(float, errors="ignore") * volume.astype(float, errors="ignore")
+    dollar_volume = close * volume
 
-    rows = []
-    for date_str, o, h, l, c, v, dv in zip(
-        norm.index,
-        col("Open"),
-        col("High"),
-        col("Low"),
-        close,
-        volume,
-        dollar_volume,
-    ):
-        rows.append(
-            (
-                t,
-                str(date_str),
-                None if pd.isna(o) else float(o),
-                None if pd.isna(h) else float(h),
-                None if pd.isna(l) else float(l),
-                None if pd.isna(c) else float(c),
-                None if pd.isna(v) else float(v),
-                None if pd.isna(dv) else float(dv),
-            )
+    rows = [
+        (
+            t,
+            str(date_str),
+            None if pd.isna(o) else float(o),
+            None if pd.isna(h) else float(h),
+            None if pd.isna(l) else float(l),
+            None if pd.isna(c) else float(c),
+            None if pd.isna(v) else float(v),
+            None if pd.isna(dv) else float(dv),
         )
+        for date_str, o, h, l, c, v, dv in zip(
+            norm.index, col("Open"), col("High"), col("Low"),
+            close, volume, dollar_volume,
+        )
+    ]
 
     sql = (
         "INSERT OR REPLACE INTO prices "
@@ -408,23 +394,3 @@ def cache_get_last_index_date(index_code: str) -> str | None:
     if row is None or row[0] is None:
         return None
     return str(row[0])
-
-
-# ---------------------------------------------------------------------------
-# 설정 (settings)
-# ---------------------------------------------------------------------------
-
-def cache_set_setting(key: str, value: str) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            (key, value),
-        )
-
-
-def cache_get_setting(key: str, default: str | None = None) -> str | None:
-    with _connect() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    if row is None:
-        return default
-    return row[0]
