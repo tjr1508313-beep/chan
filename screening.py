@@ -15,6 +15,7 @@ Phase 1 — 미국주식 MVP. 한국주식/코인은 추후 Phase에서 지원.
 
 import streamlit as st
 
+from screening.auth import require_password
 from screening.theme import apply_theme
 from screening.ui import (
     render_asset_selector,
@@ -32,6 +33,9 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     apply_theme()
+
+    # ─── 비밀번호 잠금 (배포 환경에서만 활성, 로컬은 자동 비활성) ───
+    require_password()
 
     # ─── 사이드바 자산군 선택 ───
     asset_class = render_asset_selector()
