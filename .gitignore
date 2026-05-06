@@ -24,6 +24,9 @@ api_keys.json
 # Claude Code 로컬 권한 캐시 (개인 환경별로 다름)
 .claude/settings.local.json
 
+# Claude Code Agent 격리용 워크트리 (자동 생성/정리)
+.claude/worktrees/
+
 # OS
 .DS_Store
 Thumbs.db
