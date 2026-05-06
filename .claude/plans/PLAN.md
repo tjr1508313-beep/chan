@@ -124,6 +124,19 @@
   - 종목 캐시 마지막일이 지수 마지막일보다 0일 초과로 뒤처지면 ranking 단계 진입 전 제외
   - `ui.py: ui_load_ranked_df` 흐름에 끼워넣어 `stats['lag_excluded']` / `stats['after_lag']` 추가
   - `_render_pipeline_badge` 에 `lag_excluded > 0` 일 때만 "지연 -N" 표시
+- [x] 2.12 분할(Stock Split) 자동 감지 — 미국주식 (2026-05-06)
+  - `data.py: us_load_prices(..., with_actions=False)` 시그니처 확장
+    (yfinance `actions=True` 활용 — 추가 API 호출 0)
+  - `batch.py: _detect_new_split(df, last_before)` 헬퍼 + `screen_refresh_prices`
+    가 last_before 이후 새 split 발견 시 그 ticker 만 force 재시도
+  - `cache.py: cache_delete_prices(ticker)` 신설 — force 재시도 직전 옛 미조정 가격
+    통째로 삭제 후 새 데이터 INSERT (점프 방지)
+  - stats 에 `force_refetched: int` 추가, UI 새로고침 결과에 "분할재요청=N" 표시
+  - 한국은 FDR 에 splits API 없어 미적용 (분할 빈도 낮고 force 수동 대응)
+- [x] 2.13 비밀번호 잠금 게이트 (2026-05-06)
+  - `screening/auth.py: require_password()` 신설
+  - secrets.toml 또는 환경변수 미설정 시 자동 비활성 (로컬 편의)
+  - 호스팅 시도는 보류 (Oracle 가입 거부, Fly free tier 폐지) — 코드만 미리 두기
   - **KRX 정보데이터시스템 익명 호출 차단 확인** (응답: `LOGOUT`)
   - **pykrx 1.2.7 에 admin/warning 함수 없음** 확인
   - 옵션: (a) KRX 회원 ID/PW 셋업, (b) DART API 키, (c) 네이버 스크래핑(약관 회색), (d) 보류

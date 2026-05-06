@@ -1,7 +1,8 @@
 # 스크리닝 프로젝트 메모리
 
-> RS 시간 정합성 보장 추가 직후 스냅샷 — 2026-05-06 기준.
-> Phase 1 (미국주식) 완료, Phase 2.1~2.7 + 2.11 완료, 2.8(사용자 실행 테스트) 진행 중.
+> 분할 자동 감지 + 비번 잠금 추가 직후 스냅샷 — 2026-05-06 기준.
+> Phase 1 (미국주식) 완료, Phase 2.1~2.7 + 2.11~2.13 완료, 2.8(사용자 실행 테스트) 진행 중.
+> 클라우드 호스팅은 보류 (Oracle 가입 거부, Fly free tier 폐지) — 비번 코드는 미리 둠.
 
 ## 프로젝트 구조
 ```
@@ -33,7 +34,8 @@ C:\스크리닝\
 ### `screening/data.py` (미국 외부 API)
 - `us_get_nasdaq_tickers() -> list[str]` — FDR, 약 3,860개
 - `us_get_sp500_tickers() -> list[str]` — FDR, 약 503개
-- `us_load_prices(ticker, days) -> DataFrame` — yfinance, auto_adjust=True, OHLCV
+- `us_load_prices(ticker, days, with_actions=False) -> DataFrame` — yfinance, auto_adjust=True
+  - `with_actions=True` 시 OHLCV + `Stock Splits` + `Dividends` (분할 감지용, 추가 API 호출 0)
 - `us_load_index(index_code, days) -> DataFrame` — `^IXIC`/`^GSPC`
 - `us_get_meta(ticker) -> dict` — name_en/name_kr/sector/country/exchange/market_cap/is_china/is_risk
 - `us_get_kr_name(ticker) -> str | None` — CSV 매핑 조회
@@ -52,14 +54,18 @@ C:\스크리닝\
 - 테이블: `prices` (+dollar_volume 자동 — 한국에선 원화 거래대금), `metadata`, `index_prices`, `settings`
 - CRUD: `cache_save_prices/load_prices/save_meta/load_meta/save_index/load_index`
 - 증분 커서: `cache_get_last_price_date`, `cache_get_last_index_date`
-- **신규**: `cache_get_all_last_price_dates()` — 한 SQL 로 모든 ticker 마지막일 일괄 조회 (stale-first 정렬용)
+- 일괄 조회: `cache_get_all_last_price_dates()` — 한 SQL 로 모든 ticker 마지막일 (stale-first 정렬용)
+- **신규** (2026-05-06): `cache_delete_prices(ticker)` — 분할 발생 시 옛 미조정 가격 통째로 삭제
 - TTL 체크: `cache_meta_age_days`
 
 ### `screening/batch.py` (미국 오케스트레이션)
 - `screen_refresh_prices(tickers, days=300, force=False, sleep_sec=0.2)`
+  - **분할 자동 감지** (2026-05-06): last_before 있는 ticker 는 with_actions=True 로 받아
+    Stock Splits 컬럼 검사 → 신규 split 발견 시 그 ticker 만 `cache_delete_prices` + force fetch
 - `screen_refresh_meta(tickers, ttl_days=7, force=False, sleep_sec=0.3)`
 - `screen_refresh_index(index_code, days=300, force=False)`
-- 반환: `{"updated": int, "skipped": int, "failed": list[str]}`
+- 반환 (시세): `{"updated": int, "skipped": int, "failed": list[str], "force_refetched": int}`
+- 반환 (메타/지수): `{"updated": int, "skipped": int, "failed": list[str]}`
 
 ### `screening/batch_kr.py` (한국 오케스트레이션 — FDR)
 - `screen_refresh_prices_kr(tickers, days=300, force=False, sleep_sec=0.1)` — 미국보다 sleep 짧음
@@ -110,7 +116,7 @@ C:\스크리닝\
 2. **`yf.Ticker().info` 느림** (요청당 0.3~1초) → 메타 TTL 7일
 3. **장중 호출 시 당일 미완성 봉** — 변동성 필터 오작동 가능. 배치는 장 마감 후 권장
 4. **한국 위험종목 필터 보류** — KRX 공시 익명 차단, pykrx 인증 필요, DART API 키 미설정. 사이드바 체크박스만 살아있음 (실제 적용 안 됨)
-5. **한국 corporate action 자동 감지 미구현** — 분할/spin-off 발생 시 사용자가 force 수동 또는 stale-first 정렬에 의지
+5. **한국 corporate action 자동 감지 미구현** — FDR 에 splits API 없음. 사용자가 force 수동 또는 stale-first 정렬에 의지 (미국은 2026-05-06 자동화 완료)
 6. ~~**종목/지수 마지막일 미스매치 시 RS 시간 정합성 잃음**~~ — `screen_filter_by_index_lag` 로 해결됨 (2026-05-06)
 7. **`dollar_volume` 컬럼명 한국에서 의미 어색** — 실제로는 원화 거래대금. Phase 4 통합 시 `traded_value` 등으로 일반화 검토
 8. **차트 함수 미국/한국 중복** — `_us_render_chart` / `_kr_render_chart` 별도. 통화 단위만 다름. 추후 `_render_chart_panel(currency_symbol, price_format, dv_unit)` 일반화 후보
@@ -118,12 +124,13 @@ C:\스크리닝\
 10. **Streamlit removeChild 워닝** — column 구조 hot reload 시 발생. Ctrl+Shift+R 로 해결
 11. **장중 실시간 조회 미지원** — 일 1회 배치만
 
-## 다음 작업 후보 (2026-05-06 갱신)
-1. **corporate action 자동 감지** (yfinance Ticker.splits 비교) → 분할 발생 종목 자동 force fetch
-2. **차트 함수 `_render_chart_panel` 일반화** (currency_symbol, price_format, dv_unit 인자화)
+## 다음 작업 후보 (2026-05-06 갱신 — corporate action 완료)
+1. **차트 함수 `_render_chart_panel` 일반화** (currency_symbol, price_format, dv_unit 인자화) — `_us_render_chart` / `_kr_render_chart` 중복 -150줄 제거
+2. **`max_lag_days` 사이드바 슬라이더 노출** — 현재 0 하드코딩, 사용자가 너무 엄격하다 느끼면 1~5 조정 가능하게
 3. **위험종목 데이터 소스 결정** — KRX 회원 ID/PW 또는 DART API 키 셋업 후 `kr_risk.py` 추가
-4. **`max_lag_days` 사이드바 슬라이더 노출** — 현재 0 하드코딩, 사용자가 너무 엄격하다 느끼면 1~5 조정 가능하게
+4. **한국 분할 감지** — FDR 자체 splits API 없음. KRX 공시 또는 가격 점프 휴리스틱으로 우회 검토
 5. **Phase 2 며칠 사용 후 피드백 모아 → Phase 3 코인 착수**
+6. **(보류) 클라우드 호스팅** — Oracle/Fly 모두 막힘. 무료+영속+24/7 옵션 사라짐. 비번 코드는 미리 둠
 
 ## 테스트 상태
 - Phase 1 미국 (2026-04-21): 전체 파이프라인 스모크 OK — AAPL/MSFT/NVDA/BABA + ^IXIC, NVDA(1.335) > AAPL(0.794) > MSFT(0.744), BABA 중국 필터 제외

@@ -69,17 +69,25 @@ def _calendar_span(days: int) -> int:
     return max(_CAL_DAYS_FLOOR, int(days * _CAL_DAYS_MULTIPLIER))
 
 
-def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
-    """yfinance 다중 컬럼/빈 DF 등을 표준 OHLCV 로 정규화."""
+def _normalize_ohlcv(df: pd.DataFrame, with_actions: bool = False) -> pd.DataFrame:
+    """yfinance 다중 컬럼/빈 DF 등을 표준 OHLCV 로 정규화.
+
+    Args:
+        df: yfinance 원본 DataFrame.
+        with_actions: True 면 `Stock Splits` / `Dividends` 컬럼도 보존.
+            (분할 감지용 — `screen_refresh_prices` 가 사용)
+    """
+    base_cols = ["Open", "High", "Low", "Close", "Volume"]
     if df is None or df.empty:
-        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        cols = base_cols + (["Stock Splits", "Dividends"] if with_actions else [])
+        return pd.DataFrame(columns=cols)
 
     # yfinance 가 MultiIndex 컬럼을 돌려줄 때 대비
     if isinstance(df.columns, pd.MultiIndex):
         df = df.copy()
         df.columns = df.columns.get_level_values(0)
 
-    wanted = ["Open", "High", "Low", "Close", "Volume"]
+    wanted = base_cols + (["Stock Splits", "Dividends"] if with_actions else [])
     existing = [c for c in wanted if c in df.columns]
     out = df[existing].copy()
     idx = pd.to_datetime(out.index)
@@ -124,15 +132,20 @@ def us_get_sp500_tickers() -> list[str]:
 # 시세
 # ---------------------------------------------------------------------------
 
-def us_load_prices(ticker: str, days: int) -> pd.DataFrame:
+def us_load_prices(
+    ticker: str, days: int, with_actions: bool = False
+) -> pd.DataFrame:
     """단일 종목 일봉 OHLCV (최근 `days` 영업일) 반환.
 
     Args:
         ticker: 미국주식 티커 (예: "AAPL").
         days: 조회 기간(영업일 기준).
+        with_actions: True 면 `Stock Splits` / `Dividends` 컬럼도 함께 반환.
+            (분할 감지용 — 추가 API 호출 없이 같은 다운로드에 포함)
 
     Returns:
-        index=date, columns=[Open, High, Low, Close, Volume] DataFrame.
+        index=date, columns=[Open, High, Low, Close, Volume,
+        (with_actions 시 +Stock Splits, Dividends)] DataFrame.
         `auto_adjust=True` 적용 (분할/배당 조정 — RS 계산 오염 방지).
     """
     import yfinance as yf
@@ -145,10 +158,11 @@ def us_load_prices(ticker: str, days: int) -> pd.DataFrame:
         start=start.isoformat(),
         end=end.isoformat(),
         auto_adjust=True,
+        actions=with_actions,
         progress=False,
         threads=False,
     )
-    df = _normalize_ohlcv(raw)
+    df = _normalize_ohlcv(raw, with_actions=with_actions)
     if df.empty:
         return df
     return df.tail(days)

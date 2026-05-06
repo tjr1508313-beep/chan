@@ -225,6 +225,19 @@ def cache_load_prices(ticker: str, days: int | None = None) -> pd.DataFrame:
     return df
 
 
+def cache_delete_prices(ticker: str) -> int:
+    """해당 티커의 모든 시세 행 삭제. 분할/스핀오프 발생 시 옛 가격이
+    미조정 상태로 남아 점프가 생기지 않도록 통째로 갈아엎을 때 사용.
+
+    Returns:
+        삭제된 행 수.
+    """
+    t = ticker.strip().upper()
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM prices WHERE ticker = ?", (t,))
+        return int(cur.rowcount or 0)
+
+
 def cache_get_last_price_date(ticker: str) -> str | None:
     """해당 티커의 마지막 저장된 날짜(`YYYY-MM-DD`). 없으면 None."""
     t = ticker.strip().upper()

@@ -543,11 +543,16 @@ def _run_refresh(spec: dict, index_code: str, limit: int, force: bool) -> None:
                 px_result = spec["refresh_prices_fn"](
                     target, days=300, force=force, sleep_sec=sleep_p
                 )
-            st.write(
-                f"   → updated={px_result['updated']}, "
-                f"skipped={px_result['skipped']}, "
-                f"failed={len(px_result['failed'])}"
-            )
+            px_parts = [
+                f"updated={px_result['updated']}",
+                f"skipped={px_result['skipped']}",
+                f"failed={len(px_result['failed'])}",
+            ]
+            # 미국 batch 는 분할 자동 감지로 force 재다운로드 카운트 노출 (한국은 키 없음)
+            fr = px_result.get("force_refetched", 0)
+            if fr:
+                px_parts.append(f"분할재요청={fr}")
+            st.write("   → " + ", ".join(px_parts))
 
             st.write(f"4) 메타데이터 갱신 ({len(target)}건)")
             with st.spinner(f"{spec['refresh_data_label']} 메타 조회 중..."):
