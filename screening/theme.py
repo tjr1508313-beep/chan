@@ -30,18 +30,27 @@ COLOR_ACCENT = "#ff4b4b"
 _CSS = f"""
 <style>
 /* ───── 한글 폰트 (Pretendard — 자모 가독성 우수) ───── */
+/* 두 CDN 모두 로드 — 하나 차단돼도 다른 게 살아남도록 */
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
+@import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap');
 
-html, body, .stApp,
-[class*="st-"], [data-testid*="st"],
-button, input, textarea, select,
-h1, h2, h3, h4, h5, h6, p, span, div, label, caption {{
-    font-family: 'Pretendard Variable', 'Pretendard', -apple-system,
-        BlinkMacSystemFont, 'Malgun Gothic', '맑은 고딕',
-        'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif !important;
+html, body, .stApp {{
+    font-family: 'Pretendard Variable', 'Pretendard', 'Noto Sans KR',
+        -apple-system, BlinkMacSystemFont, 'Malgun Gothic', '맑은 고딕',
+        'Apple SD Gothic Neo', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+}}
+
+/* Material Symbols/Icons 아이콘 보호 (위 폰트가 덮어쓰지 않도록) */
+[class*="material-symbols"],
+[class*="material-icons"],
+[class*="MuiIcon"],
+.icon,
+i[class*="icon"] {{
+    font-family: 'Material Symbols Outlined', 'Material Icons',
+        'Material Symbols Rounded', sans-serif !important;
 }}
 
 /* ───── 기본 배경/텍스트 ───── */
