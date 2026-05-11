@@ -29,6 +29,21 @@ COLOR_ACCENT = "#ff4b4b"
 
 _CSS = f"""
 <style>
+/* ───── 한글 폰트 (Pretendard — 자모 가독성 우수) ───── */
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
+
+html, body, .stApp,
+[class*="st-"], [data-testid*="st"],
+button, input, textarea, select,
+h1, h2, h3, h4, h5, h6, p, span, div, label, caption {{
+    font-family: 'Pretendard Variable', 'Pretendard', -apple-system,
+        BlinkMacSystemFont, 'Malgun Gothic', '맑은 고딕',
+        'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif !important;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}}
+
 /* ───── 기본 배경/텍스트 ───── */
 .stApp {{
     background-color: {COLOR_BG};
