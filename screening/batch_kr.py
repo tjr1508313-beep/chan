@@ -6,16 +6,16 @@
 미국 batch 와의 차이:
     - 데이터 소스 = `screening.data_kr` (FDR 단일)
     - 티커 정규화 = `.zfill(6)` (대문자화 X — 한국 코드는 6자리 숫자)
-    - 호출 sleep 기본값을 약간 짧게 (FDR 이 yfinance 보다 안정적)
+    - 시세 다운로드는 `ThreadPoolExecutor` 로 병렬화 (FDR HTTP I/O 바운드).
 
 캐시 테이블은 미국과 **공유**한다. 티커 형식이 자연 분리되므로 충돌 없음.
 """
 
 from __future__ import annotations
 
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
-from typing import Iterable
+from typing import Callable, Iterable
 
 from . import cache
 from . import data_kr as kr_data
@@ -43,56 +43,82 @@ def _days_since(date_str: str) -> int:
 # 시세 배치
 # ---------------------------------------------------------------------------
 
+def _refresh_one_price(t: str, days: int, force: bool) -> tuple[str, str | None]:
+    """단일 종목 시세 갱신 — ThreadPool 워커용.
+
+    Returns:
+        ("updated"|"skipped"|"failed", failed_ticker_or_None)
+    """
+    try:
+        last_before: str | None = None
+        if not force:
+            last_before = cache.cache_get_last_price_date(t)
+            if last_before is not None:
+                gap = _days_since(last_before)
+                if gap <= 0:
+                    return ("skipped", None)
+                fetch_days = min(days, max(5, int(gap * 1.1) + 3))
+            else:
+                fetch_days = days
+        else:
+            fetch_days = days
+
+        df = kr_data.kr_load_prices(t, fetch_days)
+        if df is None or df.empty:
+            return ("failed", t)
+
+        cache.cache_save_prices(t, df)
+        last_after = cache.cache_get_last_price_date(t)
+        if last_before is not None and last_after == last_before:
+            return ("skipped", None)
+        return ("updated", None)
+    except Exception:
+        return ("failed", t)
+
+
 def screen_refresh_prices_kr(
     tickers: Iterable[str],
     days: int = 300,
     force: bool = False,
-    sleep_sec: float = 0.1,
+    max_workers: int = 8,
+    progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict:
-    """한국 종목 시세를 캐시에 증분 업데이트.
+    """한국 종목 시세를 캐시에 증분 업데이트 (병렬).
 
-    Args, Returns: 미국 `screen_refresh_prices` 와 동일.
+    Args:
+        tickers: 6자리 코드 리스트.
+        days: 초회 다운로드 시 영업일 수.
+        force: True 면 캐시 무시.
+        max_workers: ThreadPool 동시 요청 수. FDR 8 권장.
+        progress_cb: `(done, total)` 콜백. 매 종목 완료 시 호출.
+
+    Returns: 미국 `screen_refresh_prices` 와 동일 형태.
     """
     cache.init_cache()
+    tickers_list = [_normalize_ticker(t) for t in tickers if t and str(t).strip()]
+    total = len(tickers_list)
+
     updated = 0
     skipped = 0
     failed: list[str] = []
 
-    tickers_list = [_normalize_ticker(t) for t in tickers if t and str(t).strip()]
+    if total == 0:
+        return {"updated": 0, "skipped": 0, "failed": []}
 
-    for t in tickers_list:
-        try:
-            last_before: str | None = None
-            if not force:
-                last_before = cache.cache_get_last_price_date(t)
-                if last_before is not None:
-                    gap = _days_since(last_before)
-                    if gap <= 0:
-                        skipped += 1
-                        continue
-                    fetch_days = min(days, max(5, int(gap * 1.1) + 3))
-                else:
-                    fetch_days = days
-            else:
-                fetch_days = days
-
-            df = kr_data.kr_load_prices(t, fetch_days)
-            if df is None or df.empty:
-                failed.append(t)
-                continue
-
-            cache.cache_save_prices(t, df)
-
-            last_after = cache.cache_get_last_price_date(t)
-            if last_before is not None and last_after == last_before:
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(_refresh_one_price, t, days, force) for t in tickers_list]
+        done = 0
+        for fut in as_completed(futures):
+            kind, val = fut.result()
+            if kind == "updated":
+                updated += 1
+            elif kind == "skipped":
                 skipped += 1
             else:
-                updated += 1
-        except Exception:
-            failed.append(t)
-        finally:
-            if sleep_sec > 0:
-                time.sleep(sleep_sec)
+                failed.append(val)  # type: ignore[arg-type]
+            done += 1
+            if progress_cb is not None:
+                progress_cb(done, total)
 
     return {"updated": updated, "skipped": skipped, "failed": failed}
 
@@ -105,12 +131,11 @@ def screen_refresh_meta_kr(
     tickers: Iterable[str],
     ttl_days: int = 7,
     force: bool = False,
-    sleep_sec: float = 0.0,
 ) -> dict:
     """한국 종목 메타데이터를 TTL 기반으로 증분 업데이트.
 
     FDR `StockListing` 은 한 번 호출에 전체 종목을 받아오므로 종목별 외부 호출
-    비용이 없다 (`data_kr` 내부에서 프로세스 캐시). `sleep_sec` 기본 0.0.
+    비용이 없다 (`data_kr` 내부에서 프로세스 캐시). 병렬화 불필요.
     """
     cache.init_cache()
     updated = 0
@@ -135,9 +160,6 @@ def screen_refresh_meta_kr(
             updated += 1
         except Exception:
             failed.append(t)
-        finally:
-            if sleep_sec > 0:
-                time.sleep(sleep_sec)
 
     return {"updated": updated, "skipped": skipped, "failed": failed}
 

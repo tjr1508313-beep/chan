@@ -213,21 +213,15 @@ _US_SPEC: dict[str, Any] = {
     "refresh_data_label": "yfinance",
     "refresh_btn": "yfinance에서 내려받기",
     "refresh_btn_help": (
-        "지수 + 선두 N개 구성종목의 시세/메타를 yfinance 에서 내려받아 "
-        "로컬 SQLite 에 저장합니다. 앱은 이 DB만 읽으므로 최신 시세를 "
-        "반영하려면 이 버튼을 눌러야 합니다."
+        "지수 + 전체 구성종목의 시세/메타를 yfinance 에서 병렬로 내려받아 "
+        "로컬 SQLite 에 저장. 캐시가 오래됐거나 없는 종목부터 우선 처리. "
+        "나스닥 전체(3800+) 첫 다운로드 ≈ 15~25분, 이후 증분은 수 분."
     ),
-    "refresh_help": (
-        "yfinance 에서 한 번에 받아올 종목 수. "
-        "나스닥 전체(3800+)는 30분 이상 걸림. "
-        "테스트/점진 확장용으로 제한 가능."
-    ),
-    "refresh_max": 4000,
     "refresh_index_fn": screen_refresh_index,
     "refresh_prices_fn": screen_refresh_prices,
     "refresh_meta_fn": screen_refresh_meta,
-    "sleep_prices": 0.2,
-    "sleep_meta": 0.3,
+    "prices_max_workers": 4,
+    "meta_max_workers": 4,
     "force_help": (
         "이전 캐시를 덮어쓰고 yfinance 에서 다시 받음. 분할/spin-off 등 "
         "corporate action 이후 historical 가격이 retroactively 재조정된 "
@@ -282,19 +276,15 @@ _KR_SPEC: dict[str, Any] = {
     "refresh_data_label": "FDR",
     "refresh_btn": "FDR에서 내려받기",
     "refresh_btn_help": (
-        "지수 + 선두 N개 구성종목의 시세/메타를 FinanceDataReader 에서 "
-        "내려받아 로컬 SQLite 에 저장합니다."
+        "지수 + 전체 구성종목의 시세/메타를 FinanceDataReader 에서 병렬로 "
+        "내려받아 로컬 SQLite 에 저장. 캐시가 오래됐거나 없는 종목부터 우선 처리. "
+        "코스피 전체(950) 첫 다운로드 ≈ 2~3분, 코스닥 전체(1800) ≈ 4~6분."
     ),
-    "refresh_help": (
-        "FinanceDataReader 에서 한 번에 받아올 종목 수. "
-        "코스피 전체(950)는 5분, 코스닥 전체(1800)는 10분 안팎."
-    ),
-    "refresh_max": 2900,
     "refresh_index_fn": screen_refresh_index_kr,
     "refresh_prices_fn": screen_refresh_prices_kr,
     "refresh_meta_fn": screen_refresh_meta_kr,
-    "sleep_prices": 0.1,
-    "sleep_meta": 0.0,
+    "prices_max_workers": 8,
+    "meta_max_workers": None,
     "force_help": (
         "이전 캐시를 덮어쓰고 FDR 에서 다시 받음. 분할/액면분할 등 이후 "
         "historical 가격이 retroactively 재조정된 경우 정합성 복구용."
@@ -393,8 +383,8 @@ def _render_index_status_badge(index_code: str) -> None:
     )
 
 
-def _render_sidebar(spec: dict) -> tuple[str, int, int, int, dict]:
-    """자산군 사이드바 → (index_code, rs_period, top_n, refresh_limit, filter_config)."""
+def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
+    """자산군 사이드바 → (index_code, rs_period, top_n, filter_config)."""
     with st.sidebar:
         st.markdown(f"##### {spec['label']} 설정")
 
@@ -425,12 +415,6 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, int, dict]:
         # 데이터 새로고침
         st.divider()
         st.markdown("##### 데이터 새로고침")
-        refresh_limit = st.number_input(
-            "이번에 받을 종목 수",
-            min_value=10, max_value=spec["refresh_max"], value=200, step=50,
-            key=_key(spec, "refresh_limit"),
-            help=spec["refresh_help"],
-        )
         force_refresh = st.checkbox(
             "캐시 무시하고 전부 새로 받기 (force)",
             value=False,
@@ -440,7 +424,7 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, int, dict]:
         if st.button(
             spec["refresh_btn"], width="stretch", help=spec["refresh_btn_help"]
         ):
-            _run_refresh(spec, index_code, int(refresh_limit), force=bool(force_refresh))
+            _run_refresh(spec, index_code, force=bool(force_refresh))
 
         # 필터 설정
         st.divider()
@@ -507,13 +491,13 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, int, dict]:
             "exclude_risk": bool(exclude_risk),
         }
 
-    return index_code, int(rs_period), int(top_n), int(refresh_limit), filter_config
+    return index_code, int(rs_period), int(top_n), filter_config
 
 
 # ─── 새로고침 ────────────────────────────────────────────────────────
 
-def _run_refresh(spec: dict, index_code: str, limit: int, force: bool) -> None:
-    """캐시 새로고침 — 지수 + 구성종목 상위 limit 개의 시세/메타 갱신."""
+def _run_refresh(spec: dict, index_code: str, force: bool) -> None:
+    """캐시 새로고침 — 지수 + 전체 구성종목 시세/메타 병렬 갱신."""
     label = f"{index_code} 캐시 새로고침 시작 …"
     if force:
         label = f"{index_code} 강제 새로고침 (캐시 덮어쓰기) …"
@@ -524,12 +508,11 @@ def _run_refresh(spec: dict, index_code: str, limit: int, force: bool) -> None:
             if not tickers:
                 status.update(label="구성종목을 가져오지 못함", state="error")
                 return
-            tickers = _sort_tickers_stale_first(
+            target = _sort_tickers_stale_first(
                 tickers, normalize_upper=spec["normalize_upper"]
             )
-            target = tickers[:limit]
             st.write(
-                f"   → 총 {len(tickers)}개 중 선두(stale 우선) {len(target)}개 대상"
+                f"   → 전체 {len(target)}개 대상"
                 + (" · force=True" if force else "")
             )
 
@@ -537,28 +520,58 @@ def _run_refresh(spec: dict, index_code: str, limit: int, force: bool) -> None:
             idx_result = spec["refresh_index_fn"](index_code, days=300, force=force)
             st.write(f"   → {idx_result}")
 
-            sleep_p = spec["sleep_prices"]
-            st.write(f"3) 종목 시세 갱신 ({len(target)}건, sleep {sleep_p}s/건)")
-            with st.spinner(f"{spec['refresh_data_label']} 호출 중..."):
-                px_result = spec["refresh_prices_fn"](
-                    target, days=300, force=force, sleep_sec=sleep_p
-                )
+            px_workers = spec["prices_max_workers"]
+            st.write(
+                f"3) 종목 시세 갱신 ({len(target)}건, 동시 {px_workers}워커)"
+            )
+            px_bar = st.progress(0.0, text=f"0 / {len(target)}")
+
+            def _on_price_progress(done: int, total: int) -> None:
+                pct = done / total if total else 1.0
+                px_bar.progress(pct, text=f"{done} / {total}")
+
+            px_result = spec["refresh_prices_fn"](
+                target,
+                days=300,
+                force=force,
+                max_workers=px_workers,
+                progress_cb=_on_price_progress,
+            )
+            px_bar.empty()
             px_parts = [
                 f"updated={px_result['updated']}",
                 f"skipped={px_result['skipped']}",
                 f"failed={len(px_result['failed'])}",
             ]
-            # 미국 batch 는 분할 자동 감지로 force 재다운로드 카운트 노출 (한국은 키 없음)
             fr = px_result.get("force_refetched", 0)
             if fr:
                 px_parts.append(f"분할재요청={fr}")
             st.write("   → " + ", ".join(px_parts))
 
-            st.write(f"4) 메타데이터 갱신 ({len(target)}건)")
-            with st.spinner(f"{spec['refresh_data_label']} 메타 조회 중..."):
-                # 미국 batch 는 sleep_sec 인자, 한국도 동일 시그니처.
+            meta_workers = spec.get("meta_max_workers")
+            st.write(
+                f"4) 메타데이터 갱신 ({len(target)}건"
+                + (f", 동시 {meta_workers}워커)" if meta_workers else ")")
+            )
+            if meta_workers:
+                meta_bar = st.progress(0.0, text=f"0 / {len(target)}")
+
+                def _on_meta_progress(done: int, total: int) -> None:
+                    pct = done / total if total else 1.0
+                    meta_bar.progress(pct, text=f"{done} / {total}")
+
                 meta_result = spec["refresh_meta_fn"](
-                    target, ttl_days=7, force=force, sleep_sec=spec["sleep_meta"]
+                    target,
+                    ttl_days=7,
+                    force=force,
+                    max_workers=meta_workers,
+                    progress_cb=_on_meta_progress,
+                )
+                meta_bar.empty()
+            else:
+                # 한국 메타는 프로세스 캐시 활용, 순차 처리로 충분
+                meta_result = spec["refresh_meta_fn"](
+                    target, ttl_days=7, force=force
                 )
             st.write(
                 f"   → updated={meta_result['updated']}, "
@@ -838,7 +851,7 @@ def _render_chart_metrics(spec: dict, df: pd.DataFrame, atr9: pd.Series) -> None
 
 def _render_screening_tab(spec: dict) -> None:
     """공통 스크리닝 탭 — 사이드바 + 좌측 랭킹 + 우측 차트."""
-    index_code, rs_period, top_n, _refresh_limit, filter_config = _render_sidebar(spec)
+    index_code, rs_period, top_n, filter_config = _render_sidebar(spec)
 
     tickers = ui_load_index_tickers(index_code)
     ranked, stats = ui_load_ranked_df(
@@ -876,6 +889,17 @@ def _render_screening_tab(spec: dict) -> None:
             )
             return
         if ranked.empty:
+            lag_excluded = stats.get("lag_excluded", 0)
+            after_lag = stats.get("after_lag")
+            if lag_excluded > 0 and after_lag == 0:
+                st.warning(
+                    f"필터 통과한 {lag_excluded}개 종목 모두의 시세 캐시가 "
+                    f"**{index_display}** 지수보다 옛날 날짜에 머물러 있어, "
+                    f"RS 시간 정합성 검사에서 전부 제외됐습니다. "
+                    f"사이드바의 **[{spec['refresh_btn']}]** 을 눌러 "
+                    f"시세 캐시를 최신화해주세요."
+                )
+                return
             idx_cache = cache_load_index(index_code, days=rs_period + 10)
             if idx_cache is None or idx_cache.empty or len(idx_cache) < rs_period + 1:
                 st.warning(
