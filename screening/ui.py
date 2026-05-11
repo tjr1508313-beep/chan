@@ -615,7 +615,7 @@ def _render_rs_header(
 
 
 def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
-    """필터 축소 흐름 배지 — '전체 → 주가 → … → Top N'."""
+    """필터 축소 흐름 배지 — '전체 → 주가 → … → 상위 N'."""
     total = stats.get("total", 0)
     if total == 0:
         return
@@ -635,8 +635,15 @@ def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
     lag_excluded = stats.get("lag_excluded", 0)
     if lag_excluded:
         parts.append(f"지연 -{lag_excluded}")
-    parts.append(f"Top {ranked_len}")
-    st.caption(" → ".join(parts))
+    parts.append(f"상위 {ranked_len}")
+    # caption 의 폰트가 작아 한글이 흐릿하게 보이는 문제 → markdown 으로 키움.
+    st.markdown(
+        f"<div style='font-size:0.92rem; color:{COLOR_TEXT}; "
+        f"margin-top:4px; margin-bottom:8px;'>"
+        + " → ".join(parts)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_filter_summary(spec: dict, cfg: dict) -> None:
@@ -654,7 +661,15 @@ def _render_filter_summary(spec: dict, cfg: dict) -> None:
     if cfg.get("exclude_risk"):
         suffix = "*" if spec["code"] == "kr" else ""  # 한국은 데이터 미적용 표시
         badges.append(f"관리 제외{suffix}")
-    st.caption("필터: " + " · ".join(badges))
+    # caption 의 폰트가 작아 한글이 흐릿하게 보이는 문제 → markdown 으로 키움.
+    st.markdown(
+        f"<div style='font-size:0.92rem; color:{COLOR_TEXT}; "
+        f"margin-top:4px; margin-bottom:2px;'>"
+        f"<span style='color:{COLOR_MUTED};'>필터:</span> "
+        + " · ".join(badges)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ─── 랭킹 테이블 ─────────────────────────────────────────────────────
