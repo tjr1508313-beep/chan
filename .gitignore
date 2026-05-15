@@ -33,6 +33,9 @@ api_keys.json
 # Claude Code Agent 격리용 워크트리 (자동 생성/정리)
 .claude/worktrees/
 
+# Claude Code 스케줄러 lock 파일
+.claude/scheduled_tasks.lock
+
 # OS
 .DS_Store
 Thumbs.db
