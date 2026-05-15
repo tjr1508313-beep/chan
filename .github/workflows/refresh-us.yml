@@ -90,8 +90,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout --orphan data-cache-tmp
           git rm -rf --cached . > /dev/null 2>&1 || true
-          # working tree 정리하지 말 것 — DB 파일 보존
-          git add screening_cache.db last_updated.txt
+          # working tree 정리하지 말 것 — DB 파일 보존.
+          # -f 필수: main 의 .gitignore 가 screening_cache.db 를 무시 룰로 잡고 있음.
+          git add -f screening_cache.db last_updated.txt
           git commit -m "US refresh $NOW_KST"
           git push --force origin HEAD:data-cache
 
