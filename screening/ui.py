@@ -1,5 +1,6 @@
 """스크리닝 앱 UI 렌더링.
 
+미국주식 + 한국주식을 한 화면에 위/아래로 함께 표시한다.
 자산군별 차이는 모듈 하단의 `_US_SPEC` / `_KR_SPEC` 두 dict 로 관리.
 공통 렌더 함수들은 `spec` 인자를 받아 통화/포맷/배치함수/키 prefix 만 분기한다.
 
@@ -11,6 +12,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 import pandas as pd
@@ -53,9 +56,6 @@ _COLOR_DOWN = COLOR_LOSS        # #1a9cff
 _COLOR_MA = "#ff9500"           # 5일 이평선 (주황)
 _COLOR_ATR = "#6366f1"          # 9일 ATR (인디고)
 _COLOR_ATR_FILL = "rgba(99, 102, 241, 0.15)"
-
-# 자산군 선택 키 (전역 — 자산군 무관)
-KEY_ASSET_CLASS = "scr_asset_class"
 
 # 지수 코드 → 사용자 친화 이름
 _INDEX_DISPLAY = {
@@ -200,7 +200,6 @@ def _calc_wilder_atr(
 
 # ─── 자산군 spec dict ───────────────────────────────────────────────
 # 통화/포맷/배치함수/필터 UI/키 prefix 등 자산군 차이를 한 곳에서 관리.
-# Phase 3 코인 추가 시 _CRYPTO_SPEC 만 새로 정의.
 
 _US_SPEC: dict[str, Any] = {
     "code": "us",
@@ -344,31 +343,6 @@ def _key(spec: dict, suffix: str) -> str:
 
 # ─── 사이드바 ────────────────────────────────────────────────────────
 
-def render_asset_selector() -> str:
-    """사이드바 최상단 자산군 선택 → `"us"` / `"kr"` / `"crypto"`."""
-    with st.sidebar:
-        st.markdown("#### 주식 스크리닝")
-        st.caption("상대강도(RS) 기반 종목 발굴")
-
-        labels_to_code = {"미국주식": "us", "한국주식": "kr", "코인": "crypto"}
-        current_label = st.session_state.get(f"{KEY_ASSET_CLASS}_label", "미국주식")
-
-        selected = st.pills(
-            "자산군",
-            options=list(labels_to_code.keys()),
-            default=current_label,
-            label_visibility="collapsed",
-            key=f"{KEY_ASSET_CLASS}_label",
-        )
-        if selected is None:
-            selected = current_label
-
-        code = labels_to_code.get(selected, "us")
-        st.session_state[KEY_ASSET_CLASS] = code
-        st.divider()
-        return code
-
-
 def _render_index_status_badge(index_code: str) -> None:
     """사이드바 미니 배지: 지수 캐시 보유 여부."""
     idx_cache = cache_load_index(index_code, days=5)
@@ -412,19 +386,8 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
         )
         _render_index_status_badge(index_code)
 
-        # 데이터 새로고침
-        st.divider()
-        st.markdown("##### 데이터 새로고침")
-        force_refresh = st.checkbox(
-            "캐시 무시하고 전부 새로 받기 (force)",
-            value=False,
-            key=_key(spec, "force_refresh"),
-            help=spec["force_help"],
-        )
-        if st.button(
-            spec["refresh_btn"], width="stretch", help=spec["refresh_btn_help"]
-        ):
-            _run_refresh(spec, index_code, force=bool(force_refresh))
+        # 데이터 새로고침 (백그라운드 스레드 — 미국/한국 독립 실행)
+        _render_refresh_section(spec, index_code)
 
         # 필터 설정
         st.divider()
@@ -494,95 +457,208 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
     return index_code, int(rs_period), int(top_n), filter_config
 
 
-# ─── 새로고침 ────────────────────────────────────────────────────────
+# ─── 새로고침 (백그라운드 스레드) ───────────────────────────────────
+# 미국/한국 새로고침을 각각 별도 스레드로 돌려 서로 블로킹하지 않게 한다.
+# 스레드는 `job` dict 만 변형하고 Streamlit API 는 호출하지 않는다
+# (ScriptRunContext 불필요). 메인 스크립트는 fragment 로 job 을 폴링한다.
 
-def _run_refresh(spec: dict, index_code: str, force: bool) -> None:
-    """캐시 새로고침 — 지수 + 전체 구성종목 시세/메타 병렬 갱신."""
-    label = f"{index_code} 캐시 새로고침 시작 …"
-    if force:
-        label = f"{index_code} 강제 새로고침 (캐시 덮어쓰기) …"
-    with st.status(label, expanded=True) as status:
-        try:
-            st.write("1) 구성종목 리스트 로드 + stale 우선 정렬")
-            tickers = ui_load_index_tickers(index_code)
-            if not tickers:
-                status.update(label="구성종목을 가져오지 못함", state="error")
-                return
-            target = _sort_tickers_stale_first(
-                tickers, normalize_upper=spec["normalize_upper"]
-            )
-            st.write(
-                f"   → 전체 {len(target)}개 대상"
-                + (" · force=True" if force else "")
-            )
+def _refresh_worker(
+    spec: dict, index_code: str, target: list[str], force: bool, job: dict
+) -> None:
+    """백그라운드 스레드 본체 — 지수/시세/메타 갱신 후 `job` 에 결과 기록."""
+    try:
+        job["phase"] = "지수 시세"
+        idx_result = spec["refresh_index_fn"](index_code, days=300, force=force)
+        job["messages"].append(f"지수: {idx_result}")
 
-            st.write("2) 지수 시세 갱신")
-            idx_result = spec["refresh_index_fn"](index_code, days=300, force=force)
-            st.write(f"   → {idx_result}")
+        job["phase"] = "종목 시세"
 
-            px_workers = spec["prices_max_workers"]
-            st.write(
-                f"3) 종목 시세 갱신 ({len(target)}건, 동시 {px_workers}워커)"
-            )
-            px_bar = st.progress(0.0, text=f"0 / {len(target)}")
+        def _px_cb(done: int, total: int) -> None:
+            job["px_done"] = done
+            job["px_total"] = total
 
-            def _on_price_progress(done: int, total: int) -> None:
-                pct = done / total if total else 1.0
-                px_bar.progress(pct, text=f"{done} / {total}")
+        px_result = spec["refresh_prices_fn"](
+            target,
+            days=300,
+            force=force,
+            max_workers=spec["prices_max_workers"],
+            progress_cb=_px_cb,
+        )
+        px_parts = [
+            f"updated={px_result['updated']}",
+            f"skipped={px_result['skipped']}",
+            f"failed={len(px_result['failed'])}",
+        ]
+        fr = px_result.get("force_refetched", 0)
+        if fr:
+            px_parts.append(f"분할재요청={fr}")
+        job["messages"].append("시세: " + ", ".join(px_parts))
 
-            px_result = spec["refresh_prices_fn"](
+        job["phase"] = "메타데이터"
+        meta_workers = spec.get("meta_max_workers")
+        if meta_workers:
+            def _meta_cb(done: int, total: int) -> None:
+                job["meta_done"] = done
+                job["meta_total"] = total
+
+            meta_result = spec["refresh_meta_fn"](
                 target,
-                days=300,
+                ttl_days=7,
                 force=force,
-                max_workers=px_workers,
-                progress_cb=_on_price_progress,
+                max_workers=meta_workers,
+                progress_cb=_meta_cb,
             )
-            px_bar.empty()
-            px_parts = [
-                f"updated={px_result['updated']}",
-                f"skipped={px_result['skipped']}",
-                f"failed={len(px_result['failed'])}",
-            ]
-            fr = px_result.get("force_refetched", 0)
-            if fr:
-                px_parts.append(f"분할재요청={fr}")
-            st.write("   → " + ", ".join(px_parts))
+        else:
+            # 한국 메타는 프로세스 캐시 활용, 순차 처리로 충분
+            meta_result = spec["refresh_meta_fn"](target, ttl_days=7, force=force)
+            job["meta_done"] = len(target)
+        job["messages"].append(
+            f"메타: updated={meta_result['updated']}, "
+            f"skipped={meta_result['skipped']}, "
+            f"failed={len(meta_result['failed'])}"
+        )
+        job["phase"] = "완료"
+    except Exception as e:  # 스레드 경계 — 예외를 job 에 담아 UI 로 전달
+        job["error"] = str(e)
+        job["phase"] = "실패"
+    finally:
+        job["running"] = False
+        job["finished_at"] = time.time()
 
-            meta_workers = spec.get("meta_max_workers")
-            st.write(
-                f"4) 메타데이터 갱신 ({len(target)}건"
-                + (f", 동시 {meta_workers}워커)" if meta_workers else ")")
+
+def _start_refresh(spec: dict, index_code: str, force: bool) -> None:
+    """새로고침 백그라운드 스레드 시작. 이미 실행 중이면 무시."""
+    job_key = _key(spec, "refresh_job")
+    existing = st.session_state.get(job_key)
+    if existing and existing.get("running"):
+        return
+
+    tickers = ui_load_index_tickers(index_code)
+    if not tickers:
+        st.session_state[job_key] = {
+            "running": False,
+            "phase": "실패",
+            "error": "구성종목 리스트를 가져오지 못했습니다.",
+            "messages": [],
+            "px_done": 0, "px_total": 0,
+            "meta_done": 0, "meta_total": 0,
+            "index_code": index_code, "force": force,
+            "started_at": time.time(), "finished_at": time.time(),
+            "cache_cleared": True,
+        }
+        return
+
+    target = _sort_tickers_stale_first(
+        tickers, normalize_upper=spec["normalize_upper"]
+    )
+    job: dict[str, Any] = {
+        "running": True,
+        "phase": "준비 중",
+        "error": None,
+        "messages": [],
+        "px_done": 0, "px_total": len(target),
+        "meta_done": 0, "meta_total": len(target),
+        "index_code": index_code, "force": force,
+        "started_at": time.time(), "finished_at": None,
+        "cache_cleared": False,
+    }
+    st.session_state[job_key] = job
+    thread = threading.Thread(
+        target=_refresh_worker,
+        args=(spec, index_code, target, force, job),
+        daemon=True,
+    )
+    thread.start()
+
+
+def _render_refresh_progress(spec: dict, job: dict) -> None:
+    """진행 중 새로고침의 실시간 진행바."""
+    elapsed = int(time.time() - job.get("started_at", time.time()))
+    st.caption(f"⏳ {job['phase']} 진행 중 … ({elapsed}초 경과)")
+
+    px_total = job.get("px_total") or 0
+    if px_total:
+        px_done = job.get("px_done", 0)
+        st.progress(min(px_done / px_total, 1.0), text=f"시세 {px_done} / {px_total}")
+    if job["phase"] == "메타데이터":
+        meta_total = job.get("meta_total") or 0
+        if meta_total:
+            meta_done = job.get("meta_done", 0)
+            st.progress(
+                min(meta_done / meta_total, 1.0),
+                text=f"메타 {meta_done} / {meta_total}",
             )
-            if meta_workers:
-                meta_bar = st.progress(0.0, text=f"0 / {len(target)}")
 
-                def _on_meta_progress(done: int, total: int) -> None:
-                    pct = done / total if total else 1.0
-                    meta_bar.progress(pct, text=f"{done} / {total}")
 
-                meta_result = spec["refresh_meta_fn"](
-                    target,
-                    ttl_days=7,
-                    force=force,
-                    max_workers=meta_workers,
-                    progress_cb=_on_meta_progress,
-                )
-                meta_bar.empty()
-            else:
-                # 한국 메타는 프로세스 캐시 활용, 순차 처리로 충분
-                meta_result = spec["refresh_meta_fn"](
-                    target, ttl_days=7, force=force
-                )
-            st.write(
-                f"   → updated={meta_result['updated']}, "
-                f"skipped={meta_result['skipped']}, "
-                f"failed={len(meta_result['failed'])}"
-            )
+def _render_refresh_result(spec: dict, job: dict) -> None:
+    """완료/실패한 새로고침 결과 표시."""
+    # 완료 직후 1회만 랭킹 캐시 무효화
+    if not job.get("cache_cleared"):
+        ui_load_ranked_df.clear()
+        job["cache_cleared"] = True
 
-            ui_load_ranked_df.clear()
-            status.update(label="새로고침 완료", state="complete")
-        except Exception as e:
-            status.update(label=f"새로고침 실패: {e}", state="error")
+    if job.get("error"):
+        st.error(f"새로고침 실패: {job['error']}")
+        return
+    st.success("새로고침 완료")
+    for msg in job.get("messages", []):
+        st.caption(msg)
+
+
+@st.fragment(run_every=2)
+def _refresh_progress_fragment(spec: dict) -> None:
+    """진행 중 새로고침 폴링 fragment — Streamlit 이 2초마다 자동 재실행.
+
+    완료 감지 시 1회만 full rerun 으로 부모를 다시 렌더 → 부모가
+    `running=False` 이면 이 fragment 를 더는 호출하지 않으므로 Streamlit 이
+    run_every 타이머를 자연 해제한다.
+    """
+    job = st.session_state.get(_key(spec, "refresh_job"))
+    if not job:
+        return
+    if job.get("running"):
+        _render_refresh_progress(spec, job)
+        return
+    # 완료 — 결과는 부모가 직접 렌더하도록 1회만 full rerun
+    if not job.get("ui_finalized"):
+        job["ui_finalized"] = True
+        st.rerun(scope="app")
+
+
+def _render_refresh_section(spec: dict, index_code: str) -> None:
+    """데이터 새로고침 UI — 버튼 + 진행상황.
+
+    미국/한국이 각각 자기 `job` 을 가지므로 서로 독립적으로 실행된다.
+    진행 중일 때만 polling fragment 를 호출하고, 끝나면 결과 함수를
+    직접 호출 → fragment 가 다음 풀-런에서 미렌더되어 타이머가 해제됨.
+    """
+    st.divider()
+    st.markdown("##### 데이터 새로고침")
+
+    job = st.session_state.get(_key(spec, "refresh_job"))
+    running = bool(job and job.get("running"))
+
+    force_refresh = st.checkbox(
+        "캐시 무시하고 전부 새로 받기 (force)",
+        value=False,
+        key=_key(spec, "force_refresh"),
+        help=spec["force_help"],
+        disabled=running,
+    )
+    if st.button(
+        spec["refresh_btn"],
+        width="stretch",
+        help=spec["refresh_btn_help"],
+        key=_key(spec, "refresh_btn"),
+        disabled=running,
+    ):
+        _start_refresh(spec, index_code, force=bool(force_refresh))
+        st.rerun()
+
+    if running:
+        _refresh_progress_fragment(spec)
+    elif job:
+        _render_refresh_result(spec, job)
 
 
 # ─── 헤더/배지/필터 요약 ───────────────────────────────────────────
@@ -862,11 +938,15 @@ def _render_chart_metrics(spec: dict, df: pd.DataFrame, atr9: pd.Series) -> None
     c3.metric("거래대금(20D 평균)", dv_display)
 
 
-# ─── 탭 엔트리 ───────────────────────────────────────────────────────
+# ─── 섹션 엔트리 ─────────────────────────────────────────────────────
 
-def _render_screening_tab(spec: dict) -> None:
-    """공통 스크리닝 탭 — 사이드바 + 좌측 랭킹 + 우측 차트."""
-    index_code, rs_period, top_n, filter_config = _render_sidebar(spec)
+def _render_screening_section(spec: dict, settings: tuple) -> None:
+    """자산군 스크리닝 섹션 — 좌측 랭킹 + 우측 차트.
+
+    사이드바는 `_render_sidebar` 가 별도로 그리며, 그 반환값을
+    `settings` 로 받아 본문만 렌더한다.
+    """
+    index_code, rs_period, top_n, filter_config = settings
 
     tickers = ui_load_index_tickers(index_code)
     ranked, stats = ui_load_ranked_df(
@@ -954,16 +1034,24 @@ def _render_screening_tab(spec: dict) -> None:
 
 # ─── 퍼블릭 엔트리 ─────────────────────────────────────────────────
 
-def render_us_tab() -> None:
-    """미국주식 스크리닝 탭."""
-    _render_screening_tab(_US_SPEC)
+def render_screening_page() -> None:
+    """미국주식 + 한국주식을 한 화면에 표시 (위: 미국, 아래: 한국).
 
+    사이드바에는 두 자산군의 설정이 위아래로 함께 나열된다.
+    """
+    with st.sidebar:
+        st.markdown("#### 주식 스크리닝")
+        st.caption("상대강도(RS) 기반 종목 발굴")
+        st.divider()
+    us_settings = _render_sidebar(_US_SPEC)
+    with st.sidebar:
+        st.divider()
+    kr_settings = _render_sidebar(_KR_SPEC)
 
-def render_kr_tab() -> None:
-    """한국주식 스크리닝 탭."""
-    _render_screening_tab(_KR_SPEC)
+    st.markdown("## 미국주식")
+    _render_screening_section(_US_SPEC, us_settings)
 
+    st.divider()
 
-def render_crypto_tab() -> None:
-    """코인 탭 (Phase 3 예정)."""
-    st.info("코인은 Phase 3에서 지원 예정입니다.")
+    st.markdown("## 한국주식")
+    _render_screening_section(_KR_SPEC, kr_settings)

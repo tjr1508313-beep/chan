@@ -48,6 +48,8 @@ def _connect() -> Iterator[sqlite3.Connection]:
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        # 미국/한국 새로고침이 동시에 돌 때 쓰기 락 경합을 견디도록 대기시간 확보
+        conn.execute("PRAGMA busy_timeout=30000")
         yield conn
         conn.commit()
     finally:
