@@ -16,8 +16,19 @@ import streamlit as st
 
 from screening.auth import require_password
 from screening.cache import init_cache
+from screening.cache_sync import sync_from_remote
 from screening.theme import apply_theme
 from screening.ui import render_screening_page
+
+
+@st.cache_resource(show_spinner=False)
+def _sync_remote_cache_once():
+    """앱 프로세스가 살아 있는 동안 1회만 원격 캐시 동기화.
+
+    Streamlit rerun 마다 재호출 방지를 위해 `cache_resource` 사용.
+    네트워크 실패는 silent — UI 배지로만 노출.
+    """
+    return sync_from_remote(force=False)
 
 
 def main() -> None:
@@ -28,6 +39,10 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     apply_theme()
+
+    # 원격 캐시 동기화는 init_cache() 보다 먼저.
+    # 받은 DB 가 스키마가 부족해도 init_cache() 가 CREATE IF NOT EXISTS 로 보강.
+    _sync_remote_cache_once()
 
     # 캐시 DB 가 없는 환경(새 체크아웃 등)에서도 읽기 경로가 깨지지 않도록 보장
     init_cache()

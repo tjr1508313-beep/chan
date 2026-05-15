@@ -1,7 +1,13 @@
 # Data cache
 screening_cache.db
+screening_cache.db-wal
+screening_cache.db-shm
+screening_cache.db.tmp
+.remote_cache_stamp.json
 *.parquet
 cache/
+# CI에서 만드는 자동 갱신 결과 (로컬 reproduce 용)
+.ci-out/
 
 # Python
 __pycache__/

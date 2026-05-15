@@ -1,0 +1,114 @@
+name: Refresh US cache
+
+# 미국주식 시세 자동 갱신
+# 트리거: 월~금 KST 07:00 (= UTC 22:00 전날 일~목)
+#   미국 정규장 종료(EST 16:00)는 KST 06:00, 30~60분 여유 두고 받음.
+# 동작: scripts/refresh_cache.py --market us 실행 후
+#   screening_cache.db 를 data-cache 브랜치에 orphan force-push.
+
+on:
+  schedule:
+    - cron: '0 22 * * 0-4'   # UTC 22:00 (월~금 KST 07:00)
+  workflow_dispatch:          # 수동 실행 허용
+
+# 같은 시장끼리는 직렬화 (지연 트리거 시 중첩 방지)
+concurrency:
+  group: refresh-us
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main (code)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download existing cache from data-cache branch
+        continue-on-error: true
+        run: |
+          set -e
+          URL="https://raw.githubusercontent.com/${{ github.repository }}/data-cache/screening_cache.db"
+          echo "Trying $URL"
+          if curl -fsSL -o screening_cache.db "$URL"; then
+            echo "Cache downloaded: $(du -h screening_cache.db | cut -f1)"
+          else
+            echo "No existing cache (first run). Will create fresh."
+          fi
+
+      - name: Run refresh
+        id: refresh
+        run: |
+          mkdir -p .ci-out
+          python -m scripts.refresh_cache --market us --json-out .ci-out/result.json
+        continue-on-error: true
+
+      - name: Capture summary
+        id: summary
+        if: always()
+        run: |
+          if [ -f .ci-out/result.json ]; then
+            SUMMARY=$(python -c "import json; d=json.load(open('.ci-out/result.json',encoding='utf-8')); print(d.get('summary') or d.get('fatal') or 'no summary')")
+          else
+            SUMMARY="(스크립트가 result.json 을 생성하지 못함)"
+          fi
+          echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${{ steps.refresh.outcome }}" >> "$GITHUB_OUTPUT"
+
+      - name: Push cache to data-cache branch
+        if: steps.refresh.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          NOW_UTC=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          NOW_KST=$(TZ='Asia/Seoul' date +"%Y-%m-%d %H:%M KST")
+          echo "$NOW_UTC" > last_updated.txt
+          echo "market=us" >> last_updated.txt
+          echo "kst=$NOW_KST" >> last_updated.txt
+          echo "summary=${{ steps.summary.outputs.summary }}" >> last_updated.txt
+
+          # orphan 강제 푸시 — 히스토리 1개만 유지
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan data-cache-tmp
+          git rm -rf --cached . > /dev/null 2>&1 || true
+          # working tree 정리하지 말 것 — DB 파일 보존
+          git add screening_cache.db last_updated.txt
+          git commit -m "US refresh $NOW_KST"
+          git push --force origin HEAD:data-cache
+
+      - name: Notify Telegram on failure
+        if: steps.refresh.outcome != 'success' || failure()
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SUMMARY: ${{ steps.summary.outputs.summary }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+            echo "Telegram secrets not set — skipping notify."
+            exit 0
+          fi
+          MSG=$(printf '🔴 스크리닝 자동갱신 실패 (US)\n%s\nrun: %s' "$SUMMARY" "$RUN_URL")
+          curl -fsS -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT}" \
+            --data-urlencode "text=${MSG}" \
+            --data-urlencode "disable_web_page_preview=true" || true

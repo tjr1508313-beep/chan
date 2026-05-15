@@ -40,6 +40,16 @@
 ### Phase 3 — 매매일지와 통합 (사용자 담당)
 - 하나의 Streamlit 앱에서 탭 분리: [매매일지] [스크리닝]
 
+### 자동 갱신 (2026-05-15)
+- **GitHub Actions** 가 평일 캐시 DB 자동 갱신, `data-cache` 브랜치에 orphan force-push
+  - KR: 평일 KST 15:40 (cron `40 6 * * 1-5`)
+  - US: 평일 KST 07:00 (cron `0 22 * * 0-4`)
+- 갱신 범위 = **지수 + 시세만** (메타데이터 제외, TTL 7일이라 수동)
+- 로컬 앱 시작 시 `screening/cache_sync.py` 가 `last_updated.txt` 확인 후
+  `screening_cache.db` 자동 다운로드 (변경 있을 때만)
+- 실패 시 텔레그램 알림 (Secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`)
+- 자세한 세팅은 [docs/auto-refresh-setup.md](docs/auto-refresh-setup.md) 참고
+
 ## 기술 스택
 - Python
 - Streamlit (웹 UI)

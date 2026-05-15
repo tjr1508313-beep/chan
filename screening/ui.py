@@ -32,6 +32,7 @@ from .cache import (
     cache_load_index,
     cache_load_prices,
 )
+from .cache_sync import get_last_sync_info, sync_from_remote
 from .core import (
     screen_apply_filters,
     screen_build_screening_df,
@@ -1034,6 +1035,64 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
 
 # ─── 퍼블릭 엔트리 ─────────────────────────────────────────────────
 
+def _render_remote_sync_badge() -> None:
+    """사이드바 상단 — 자동 갱신(원격 캐시) 마지막 동기화 정보."""
+    info = get_last_sync_info()
+
+    if info is None:
+        st.markdown(
+            f"<div style='font-size:0.78rem; color:{COLOR_MUTED};'>"
+            f"자동 갱신: <span style='color:#ff9500;'>원격 캐시 미확인</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        # status → 색상/문구
+        if info.status == "synced":
+            color, label = COLOR_PROFIT, "방금 동기화"
+        elif info.status == "up_to_date":
+            color, label = "#10b981", "최신"
+        elif info.status == "no_remote":
+            color, label = "#ff9500", "원격 캐시 없음"
+        elif info.status == "disabled":
+            color, label = COLOR_MUTED, "동기화 꺼짐"
+        else:
+            color, label = COLOR_LOSS, info.status
+
+        when = info.remote_kst or info.remote_stamp or "?"
+        market = info.remote_market or ""
+        market_str = f" · {market.upper()}" if market else ""
+        st.markdown(
+            f"<div style='font-size:0.78rem; color:{COLOR_MUTED}; line-height:1.35;'>"
+            f"자동 갱신: <span style='color:{color}; font-weight:600;'>{label}</span><br>"
+            f"<span style='color:{COLOR_MUTED};'>마지막: {when}{market_str}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    if st.button(
+        "지금 원격 캐시 받기",
+        width="stretch",
+        key="scr_sync_now_btn",
+        help=(
+            "GitHub Actions 가 평일 정기적으로 갱신해 둔 캐시 DB 를 "
+            "data-cache 브랜치에서 강제로 다시 받아옵니다. "
+            "평소에는 앱 시작 시 자동으로 1회 동기화됩니다."
+        ),
+    ):
+        with st.spinner("원격 캐시 다운로드 중…"):
+            result = sync_from_remote(force=True)
+        if result.status in ("synced", "up_to_date"):
+            st.success(
+                f"동기화 완료 ({result.status}) — {result.remote_kst or result.remote_stamp}"
+            )
+            st.cache_data.clear()  # 랭킹 캐시도 재계산
+        elif result.status == "no_remote":
+            st.warning("원격에 캐시가 아직 없습니다. (Actions 첫 실행 대기 중)")
+        else:
+            st.error(f"동기화 실패: {result.status} {result.error or ''}")
+
+
 def render_screening_page() -> None:
     """미국주식 + 한국주식을 한 화면에 표시 (위: 미국, 아래: 한국).
 
@@ -1042,6 +1101,7 @@ def render_screening_page() -> None:
     with st.sidebar:
         st.markdown("#### 주식 스크리닝")
         st.caption("상대강도(RS) 기반 종목 발굴")
+        _render_remote_sync_badge()
         st.divider()
     us_settings = _render_sidebar(_US_SPEC)
     with st.sidebar:

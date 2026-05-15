@@ -69,6 +69,37 @@
 
 ---
 
+## 자동 갱신 — GitHub Actions ✅ (2026-05-15)
+
+평일 장 종료 후 캐시 DB 자동 갱신 → 로컬 앱 시작 시 자동 동기화.
+
+### 추가된 컴포넌트
+- `scripts/refresh_cache.py` — 헤드리스 CLI (`--market us|kr`). batch 함수만 호출.
+- `.github/workflows/refresh-us.yml` / `refresh-kr.yml` — 평일 cron + 텔레그램 알림
+  - data-cache 브랜치에 orphan force-push 로 히스토리 1개만 유지 (~30MB binary)
+  - 실패/예외 시 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` Secrets 로 텔레그램 발송
+- `screening/cache_sync.py` — `last_updated.txt` 비교 후 변경 시 DB 다운로드
+  - 임시파일 → `os.replace()` 원자 교체, WAL/SHM 사이드카 정리
+  - `requests` 우선, 없으면 `urllib` 폴백 — 외부 의존 추가 없음
+  - 환경변수 `SCREENING_SKIP_REMOTE_SYNC=1` / `SCREENING_CACHE_REPO=owner/repo`
+- `screening.py` 진입점에 `@st.cache_resource _sync_remote_cache_once()` — 프로세스당 1회만 호출
+- `ui.py: _render_remote_sync_badge` — 사이드바 상단에 마지막 동기화 시각 + "지금 받기" 버튼
+
+### 결정 사항
+- **갱신 범위 = 지수 + 시세만** (메타 제외 — 7일 TTL 이라 분기 1회 수동으로 충분)
+- **DB 보관 = data-cache orphan 브랜치** (Release Asset 대비 권한·인증 단순)
+- **알림 = 실패 시만 텔레그램** (성공은 조용)
+- **일정 (cron)**:
+  - KR: `40 6 * * 1-5` UTC = 평일 KST 15:40 (장 종료 KST 15:30 + 10분 여유)
+  - US: `0 22 * * 0-4` UTC = 평일 KST 07:00 (장 종료 KST 06:00 + 1시간 여유)
+
+### 사용자 1회 세팅 (잔여)
+- 레포 Settings → Secrets 에 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` 입력
+- Actions 탭에서 첫 워크플로우 수동 트리거 (또는 그냥 다음 평일 자동 실행 대기)
+- 가이드: `docs/auto-refresh-setup.md`
+
+---
+
 ## Phase 3: 매매일지와 통합 (사용자 담당)
 - 사용자가 직접 `C:\테스트\`(매매일지) + `C:\스크리닝\` 을 상위 폴더로 묶음
 - 하나의 Streamlit 앱에서 좌측 사이드바로 [매매일지] [스크리닝] 전환
