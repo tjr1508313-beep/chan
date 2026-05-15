@@ -50,6 +50,7 @@ SyncStatus = Literal[
     "no_remote",     # 원격에 캐시 없음 (첫 실행 / data-cache 브랜치 미생성)
     "unreachable",   # 네트워크/HTTP 실패
     "disabled",      # 환경변수로 비활성화
+    "auth_required", # private 레포인데 토큰 미설정 / 권한 부족
     "error",         # 예외
 ]
 
@@ -80,6 +81,43 @@ def _stamp_url() -> str:
 
 def _db_url() -> str:
     return f"https://raw.githubusercontent.com/{_repo()}/{_BRANCH}/{_DB_FILENAME}"
+
+
+def _get_auth_token() -> str:
+    """PAT 토큰을 환경변수 또는 streamlit secrets 에서 읽음.
+
+    우선순위:
+        1. 환경변수 `SCREENING_CACHE_TOKEN`
+        2. `.streamlit/secrets.toml` 의 `github_cache_token`
+
+    private 레포일 때만 필요. public 레포면 빈 문자열 반환해도 raw URL 작동.
+    """
+    tok = os.environ.get("SCREENING_CACHE_TOKEN", "").strip()
+    if tok:
+        return tok
+    try:
+        import streamlit as st  # 옵셔널 — CLI 에서는 미import
+        try:
+            tok = str(st.secrets.get("github_cache_token", "") or "")
+        except (FileNotFoundError, AttributeError, KeyError):
+            tok = ""
+    except ImportError:
+        tok = ""
+    return tok.strip()
+
+
+def _auth_headers() -> dict[str, str]:
+    """raw.githubusercontent.com 호출에 붙일 Authorization 헤더."""
+    headers = {"User-Agent": "screening-app"}
+    tok = _get_auth_token()
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    return headers
+
+
+def has_auth_token() -> bool:
+    """UI 가 사이드바에서 '토큰 미설정' 경고를 띄울지 결정."""
+    return bool(_get_auth_token())
 
 
 def _parse_stamp(text: str) -> dict[str, str]:
@@ -155,14 +193,28 @@ def sync_from_remote(force: bool = False) -> SyncResult:
         except Exception as e:
             return SyncResult(status="error", error=f"urllib fallback: {e}")
 
+    headers = _auth_headers()
+    has_token = "Authorization" in headers
+
     # 1) 원격 stamp 받기
     try:
-        r = requests.get(_stamp_url(), timeout=_STAMP_TIMEOUT)
+        r = requests.get(_stamp_url(), timeout=_STAMP_TIMEOUT, headers=headers)
     except Exception as e:
         return SyncResult(status="unreachable", error=str(e))
 
+    # private 레포에 토큰 없으면 404 떨어짐 — 사용자에게 명확히 안내
     if r.status_code == 404:
+        if not has_token:
+            return SyncResult(
+                status="auth_required",
+                error="private 레포라면 PAT 토큰이 필요합니다. docs/auto-refresh-setup.md 참고.",
+            )
         return SyncResult(status="no_remote")
+    if r.status_code in (401, 403):
+        return SyncResult(
+            status="auth_required",
+            error=f"HTTP {r.status_code} — 토큰 권한 부족 / 만료. PAT 재발급 필요.",
+        )
     if not r.ok:
         return SyncResult(status="unreachable", error=f"HTTP {r.status_code}")
 
@@ -186,9 +238,14 @@ def sync_from_remote(force: bool = False) -> SyncResult:
 
     # 2) DB 받기
     try:
-        with requests.get(_db_url(), timeout=_DB_TIMEOUT, stream=True) as resp:
+        with requests.get(_db_url(), timeout=_DB_TIMEOUT, stream=True, headers=headers) as resp:
             if resp.status_code == 404:
                 return SyncResult(status="no_remote", remote_stamp=remote_stamp)
+            if resp.status_code in (401, 403):
+                return SyncResult(
+                    status="auth_required", remote_stamp=remote_stamp,
+                    error=f"HTTP {resp.status_code} — 토큰 권한 부족.",
+                )
             if not resp.ok:
                 return SyncResult(
                     status="unreachable",
@@ -236,13 +293,23 @@ def _sync_with_urllib(force: bool) -> SyncResult:
     from urllib.request import Request, urlopen
     from urllib.error import HTTPError, URLError
 
+    headers = _auth_headers()
+    has_token = "Authorization" in headers
+
     try:
-        req = Request(_stamp_url(), headers={"User-Agent": "screening-app"})
+        req = Request(_stamp_url(), headers=headers)
         with urlopen(req, timeout=_STAMP_TIMEOUT) as resp:
             text = resp.read().decode("utf-8", errors="replace")
     except HTTPError as e:
         if e.code == 404:
+            if not has_token:
+                return SyncResult(
+                    status="auth_required",
+                    error="private 레포라면 PAT 필요. docs/auto-refresh-setup.md 참고.",
+                )
             return SyncResult(status="no_remote")
+        if e.code in (401, 403):
+            return SyncResult(status="auth_required", error=f"HTTP {e.code}")
         return SyncResult(status="unreachable", error=f"HTTP {e.code}")
     except URLError as e:
         return SyncResult(status="unreachable", error=str(e))
@@ -263,7 +330,7 @@ def _sync_with_urllib(force: bool) -> SyncResult:
         return result
 
     try:
-        req = Request(_db_url(), headers={"User-Agent": "screening-app"})
+        req = Request(_db_url(), headers=headers)
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = DB_PATH.with_suffix(DB_PATH.suffix + ".tmp")
         n = 0
@@ -286,6 +353,8 @@ def _sync_with_urllib(force: bool) -> SyncResult:
     except HTTPError as e:
         if e.code == 404:
             return SyncResult(status="no_remote", remote_stamp=remote_stamp)
+        if e.code in (401, 403):
+            return SyncResult(status="auth_required", remote_stamp=remote_stamp, error=f"HTTP {e.code}")
         return SyncResult(status="unreachable", remote_stamp=remote_stamp, error=f"HTTP {e.code}")
     except URLError as e:
         return SyncResult(status="unreachable", remote_stamp=remote_stamp, error=str(e))

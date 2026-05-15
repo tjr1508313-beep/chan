@@ -32,7 +32,7 @@ from .cache import (
     cache_load_index,
     cache_load_prices,
 )
-from .cache_sync import get_last_sync_info, sync_from_remote
+from .cache_sync import get_last_sync_info, has_auth_token, sync_from_remote
 from .core import (
     screen_apply_filters,
     screen_build_screening_df,
@@ -1038,14 +1038,25 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
 def _render_remote_sync_badge() -> None:
     """사이드바 상단 — 자동 갱신(원격 캐시) 마지막 동기화 정보."""
     info = get_last_sync_info()
+    token_ok = has_auth_token()
 
     if info is None:
-        st.markdown(
-            f"<div style='font-size:0.78rem; color:{COLOR_MUTED};'>"
-            f"자동 갱신: <span style='color:#ff9500;'>원격 캐시 미확인</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+        if not token_ok:
+            st.markdown(
+                f"<div style='font-size:0.78rem; color:{COLOR_MUTED}; line-height:1.35;'>"
+                f"자동 갱신: <span style='color:#ff9500;'>PAT 토큰 미설정</span><br>"
+                f"<span style='color:{COLOR_MUTED};'>private 레포는 토큰 필요 — "
+                f"<code>docs/auto-refresh-setup.md</code></span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f"<div style='font-size:0.78rem; color:{COLOR_MUTED};'>"
+                f"자동 갱신: <span style='color:#ff9500;'>원격 캐시 미확인</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
     else:
         # status → 색상/문구
         if info.status == "synced":
@@ -1054,6 +1065,8 @@ def _render_remote_sync_badge() -> None:
             color, label = "#10b981", "최신"
         elif info.status == "no_remote":
             color, label = "#ff9500", "원격 캐시 없음"
+        elif info.status == "auth_required":
+            color, label = "#ff9500", "PAT 토큰 필요"
         elif info.status == "disabled":
             color, label = COLOR_MUTED, "동기화 꺼짐"
         else:

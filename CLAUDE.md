@@ -48,6 +48,8 @@
 - 로컬 앱 시작 시 `screening/cache_sync.py` 가 `last_updated.txt` 확인 후
   `screening_cache.db` 자동 다운로드 (변경 있을 때만)
 - 실패 시 텔레그램 알림 (Secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`)
+- **Private 레포 → 로컬 PAT 필요** (`SCREENING_CACHE_TOKEN` 환경변수 또는
+  `.streamlit/secrets.toml` 의 `github_cache_token`). Contents:Read-only 권한만.
 - 자세한 세팅은 [docs/auto-refresh-setup.md](docs/auto-refresh-setup.md) 참고
 
 ## 기술 스택

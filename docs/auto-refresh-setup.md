@@ -85,6 +85,61 @@ $env:SCREENING_SKIP_REMOTE_SYNC = "1"
 $env:SCREENING_CACHE_REPO = "owner/repo"
 ```
 
+## Private 레포일 때 — PAT(Personal Access Token) 세팅
+
+Private 레포의 raw URL 은 비인증 호출 불가 → 로컬 앱이 401/404 받음.
+PAT 를 발급해 로컬에 저장하면 인증된 다운로드로 동작.
+
+### 1) PAT 발급 (Fine-grained 권장, 5분)
+
+1. https://github.com/settings/personal-access-tokens/new 열기
+2. **Token name**: `screening-cache-readonly` 같은 식별 가능한 이름
+3. **Expiration**: 1년 (만료 후 재발급 — 만료 알림 옴)
+4. **Repository access**: `Only select repositories` → 본인 스크리닝 레포 (`tjr1508313-beep/chan`) 만 선택
+5. **Repository permissions**: 아래로 스크롤 → **`Contents`** 항목을 **`Read-only`** 로
+   - 다른 권한은 모두 `No access` 유지 — 토큰이 유출돼도 캐시 다운로드 외엔 못 함
+6. `Generate token` → 표시된 토큰 (`github_pat_...`) 을 **즉시 복사** (다시 못 봄)
+
+> Classic PAT 도 동작하지만 권한 범위가 넓어 권장하지 않음.
+
+### 2) 로컬에 토큰 저장 (둘 중 하나)
+
+**A. `.streamlit/secrets.toml` (권장)**
+
+```toml
+# C:\스크리닝\.streamlit\secrets.toml
+github_cache_token = "github_pat_여기에_붙여넣기"
+```
+
+> 이 파일은 `.gitignore` 에 이미 등록 → 절대 git 에 안 올라감.
+
+**B. 환경변수**
+
+```powershell
+# 영구 설정 (재부팅 후에도 유지)
+setx SCREENING_CACHE_TOKEN "github_pat_여기에_붙여넣기"
+
+# 임시 (현재 PowerShell 세션만)
+$env:SCREENING_CACHE_TOKEN = "github_pat_여기에_붙여넣기"
+```
+
+A 와 B 둘 다 설정돼 있으면 **B(환경변수) 가 우선**.
+
+### 3) 앱 재시작
+
+기존 Streamlit 프로세스 종료(Ctrl+C) → `streamlit run screening.py` 다시 실행.
+사이드바 상단에 "자동 갱신: 방금 동기화" 떠야 정상.
+
+### 토큰 만료 후
+
+만료 7일 전 GitHub 이메일 알림 → 같은 페이지에서 `Regenerate token` 으로 갱신
+→ 로컬 토큰만 새 값으로 교체 (다른 변경 불필요).
+
+### 토큰이 유출됐다고 의심되면
+
+GitHub Settings → Personal access tokens → 해당 토큰 `Revoke` 1초.
+권한이 `Contents: Read-only` 뿐이므로 다른 데이터엔 영향 0.
+
 ## 문제 진단
 
 - **앱 사이드바에 "원격 캐시 없음"** → `data-cache` 브랜치가 아직 안 만들어짐.
