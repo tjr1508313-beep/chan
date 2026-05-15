@@ -120,6 +120,84 @@ def has_auth_token() -> bool:
     return bool(_get_auth_token())
 
 
+def _apply_remote(tmp_remote: Path) -> tuple[str, int]:
+    """다운로드한 원격 DB(`tmp_remote`)를 로컬 `DB_PATH` 에 반영.
+
+    로컬 DB 가 없으면 → rename (원자 교체).
+    로컬 DB 가 있으면 → SQLite ATTACH + INSERT OR REPLACE 로 **merge**.
+        - PK 충돌 시 원격이 우선 (정기 갱신이므로 더 최신).
+        - 로컬에만 있는 row 는 보존 (예: 다른 시장 데이터, 메타 등).
+
+    Returns:
+        (mode, merged_rows_total) — mode ∈ {"replaced", "merged"}.
+    """
+    import sqlite3
+
+    # SQLite 가 열고 있을 수도 있는 사이드카 정리 (DB 가 일관 상태가 아닐 수 있음)
+    for sidecar in (
+        DB_PATH.with_suffix(DB_PATH.suffix + "-wal"),
+        DB_PATH.with_suffix(DB_PATH.suffix + "-shm"),
+    ):
+        try:
+            sidecar.unlink()
+        except OSError:
+            pass
+
+    if not DB_PATH.exists():
+        os.replace(tmp_remote, DB_PATH)
+        return ("replaced", 0)
+
+    # ── merge 경로 ──
+    # 1) 임시 위치에 백업 (실패 시 롤백용)
+    backup = DB_PATH.with_suffix(DB_PATH.suffix + ".bak")
+    try:
+        if backup.exists():
+            backup.unlink()
+        # 원본을 백업으로 옮김
+        os.replace(DB_PATH, backup)
+        # 로컬 DB 자리는 비어있게 됨 → 원격을 일단 그 자리에 둠
+        os.replace(tmp_remote, DB_PATH)
+
+        # 이제 DB_PATH = 원격, backup = 로컬-기존
+        # 로컬-기존의 row 를 원격(현재 DB_PATH)에 추가하되, 이미 있으면 원격 유지
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            conn.execute("ATTACH DATABASE ? AS oldlocal", (str(backup),))
+            cur = conn.execute(
+                "SELECT name FROM oldlocal.sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+            tables = [r[0] for r in cur.fetchall()]
+            merged_rows = 0
+            for t in tables:
+                # 원격에 없는 row 만 채워넣기 (원격 우선)
+                cur = conn.execute(
+                    f"INSERT OR IGNORE INTO main.{t} SELECT * FROM oldlocal.{t}"
+                )
+                merged_rows += cur.rowcount or 0
+            conn.commit()
+            conn.execute("DETACH DATABASE oldlocal")
+        finally:
+            conn.close()
+    except Exception:
+        # 롤백 — 원본 복원, 받은 원격은 폐기
+        try:
+            if DB_PATH.exists():
+                DB_PATH.unlink()
+        except OSError:
+            pass
+        if backup.exists():
+            os.replace(backup, DB_PATH)
+        raise
+
+    # 성공 — 백업 정리
+    try:
+        backup.unlink()
+    except OSError:
+        pass
+    return ("merged", merged_rows)
+
+
 def _parse_stamp(text: str) -> dict[str, str]:
     """`last_updated.txt` 파싱.
 
@@ -261,16 +339,7 @@ def sync_from_remote(force: bool = False) -> SyncResult:
                         continue
                     f.write(chunk)
                     n += len(chunk)
-            # SQLite 가 열고 있을 수도 있는 사이드카(WAL/SHM) 정리
-            for sidecar in (
-                DB_PATH.with_suffix(DB_PATH.suffix + "-wal"),
-                DB_PATH.with_suffix(DB_PATH.suffix + "-shm"),
-            ):
-                try:
-                    sidecar.unlink()
-                except OSError:
-                    pass
-            os.replace(tmp, DB_PATH)
+            _apply_remote(tmp)
     except Exception as e:
         return SyncResult(
             status="error", remote_stamp=remote_stamp, error=str(e)
@@ -341,15 +410,7 @@ def _sync_with_urllib(force: bool) -> SyncResult:
                     break
                 f.write(chunk)
                 n += len(chunk)
-        for sidecar in (
-            DB_PATH.with_suffix(DB_PATH.suffix + "-wal"),
-            DB_PATH.with_suffix(DB_PATH.suffix + "-shm"),
-        ):
-            try:
-                sidecar.unlink()
-            except OSError:
-                pass
-        os.replace(tmp, DB_PATH)
+        _apply_remote(tmp)
     except HTTPError as e:
         if e.code == 404:
             return SyncResult(status="no_remote", remote_stamp=remote_stamp)
