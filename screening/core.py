@@ -18,6 +18,9 @@
     6. 최근 20일 내 일일 변동폭 50% 이상 이력 있는 종목 제외
        - 변동폭 공식: `(High - Low) / prev_close`
        - "전일 종가 대비 당일 고저 폭" 직관에 부합, prev_close 가 NaN/0 인 행은 제외
+    7. 최근 1~2일(D-0/D-1) 종가 하락폭이 9일 ATR × `max_atr_drop_multiple` 이상이면 제외
+       - 분모는 **직전일까지의 ATR9** — 큰 하락이 당일 ATR에 즉시 반영되어 필터가 무력화되는 lookahead bias 회피
+       - `0` 또는 `None` 이면 비활성
 
 파이프라인 분리:
     - `screen_build_screening_df(tickers)`: 캐시에서 데이터 읽어 종목별 1행으로 집계
@@ -54,6 +57,7 @@ _SCREEN_DF_COLUMNS = [
     "last_price",
     "avg_dollar_volume_20d",
     "max_daily_range_20d",
+    "recent_atr_drop_mult",
     "market_cap",
     "is_china",
     "is_risk",
@@ -62,6 +66,74 @@ _SCREEN_DF_COLUMNS = [
     "sector",
     "country",
 ]
+
+
+def calc_wilder_atr(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 9
+) -> pd.Series:
+    """Wilder's ATR.
+
+    TR_t  = max(H-L, |H - prevC|, |L - prevC|)
+    ATR_t = (ATR_{t-1} * (period - 1) + TR_t) / period
+    초기값: 첫 `period` 일의 TR 단순평균으로 부트스트랩.
+
+    streamlit-free 순수 계산 함수. UI 차트와 필터 헬퍼가 공유.
+    """
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    nan = float("nan")
+    atr = pd.Series(nan, index=tr.index, dtype=float)
+    if len(tr) < period:
+        return atr
+
+    initial = tr.iloc[1 : period + 1].mean()
+    atr.iloc[period] = initial
+    for i in range(period + 1, len(tr)):
+        prev_atr = atr.iloc[i - 1]
+        tr_i = tr.iloc[i]
+        if pd.isna(prev_atr) or pd.isna(tr_i):
+            continue
+        atr.iloc[i] = (prev_atr * (period - 1) + tr_i) / period
+    return atr
+
+
+def _recent_atr_drop_multiple(
+    prices: pd.DataFrame, atr_period: int = 9, lookback: int = 2
+) -> float:
+    """최근 `lookback`일 중 `(prev_close - close) / atr_prev` 최대값.
+
+    각 봉의 분모는 **그 봉의 직전일까지의 ATR9** — 큰 하락이 당일 ATR에 즉시
+    반영되어 필터가 무력화되는 lookahead bias 회피용.
+    `atr_prev` 가 0 또는 NaN 인 행은 제외. 유효 데이터가 없으면 NaN.
+    """
+    if prices is None or prices.empty:
+        return float("nan")
+    if not {"High", "Low", "Close"}.issubset(prices.columns):
+        return float("nan")
+    # ATR 부트스트랩(첫 period+1 일) + shift(1) + lookback 봉 필요
+    if len(prices) < atr_period + lookback + 1:
+        return float("nan")
+
+    atr = calc_wilder_atr(prices["High"], prices["Low"], prices["Close"], atr_period)
+    close = prices["Close"]
+    prev_close = close.shift(1)
+    atr_prev = atr.shift(1)
+
+    drop = prev_close - close  # 양수 = 하락
+    valid = atr_prev > 0
+    ratio = drop.where(valid) / atr_prev.where(valid)
+    recent = ratio.tail(lookback).dropna()
+    if recent.empty:
+        return float("nan")
+    return float(recent.max())
 
 
 def _max_daily_range(prices: pd.DataFrame, lookback: int) -> float:
@@ -141,6 +213,7 @@ def screen_build_screening_df(
         last_price = _last_close(prices)
         avg_dv = _avg_dollar_volume(prices, lookback_days)
         max_rng = _max_daily_range(prices, lookback_days)
+        recent_drop_mult = _recent_atr_drop_multiple(prices, atr_period=9, lookback=2)
 
         # 중국 판정: CSV + meta.country fallback
         china_by_meta = bool(meta.get("is_china")) if meta.get("is_china") is not None else False
@@ -162,6 +235,7 @@ def screen_build_screening_df(
                 "last_price": last_price,
                 "avg_dollar_volume_20d": avg_dv,
                 "max_daily_range_20d": max_rng,
+                "recent_atr_drop_mult": recent_drop_mult,
                 "market_cap": market_cap,
                 "is_china": is_china,
                 "is_risk": is_risk,
@@ -190,6 +264,7 @@ def _default_config() -> dict:
         "min_dollar_volume": 20_000_000.0,
         "min_market_cap": 0.0,           # 0 = 미적용. 한국주식은 3,000억(3e11) 권장
         "max_daily_range_pct": 0.50,
+        "max_atr_drop_multiple": 2.5,    # 0 = 비활성. D-0/D-1 종가 하락 / ATR9_prev
         "exclude_china": True,
         "exclude_risk": True,
     }
@@ -214,10 +289,12 @@ def screen_apply_filters(
                 "total": 3500,
                 "after_price": 2800,
                 "after_volume": 1200,
+                "after_market_cap": 1200,
                 "after_risk": 1180,
                 "after_china": 1150,
                 "after_volatility": 800,
-                "final": 800,
+                "after_atr_drop": 750,
+                "final": 750,
             }
     """
     cfg = {**_default_config(), **(config or {})}
@@ -225,7 +302,11 @@ def screen_apply_filters(
     stats: dict[str, int] = {"total": int(len(df))}
 
     if df is None or df.empty:
-        for key in ("after_price", "after_volume", "after_market_cap", "after_risk", "after_china", "after_volatility", "final"):
+        for key in (
+            "after_price", "after_volume", "after_market_cap",
+            "after_risk", "after_china", "after_volatility",
+            "after_atr_drop", "final",
+        ):
             stats[key] = 0
         return df.iloc[0:0].copy() if df is not None else pd.DataFrame(columns=_SCREEN_DF_COLUMNS), stats
 
@@ -268,6 +349,15 @@ def screen_apply_filters(
     mask_vola = ~(rng_values.fillna(-1.0) >= max_rng)
     current = current[mask_vola]
     stats["after_volatility"] = int(len(current))
+
+    # 7) 최근 1~2일 급락 — D-0/D-1 종가 하락폭 / 직전 ATR9 >= 임계값이면 제외
+    #    NaN(데이터 부족) 은 통과. 0 / None 이면 단계 자체를 건너뜀.
+    max_drop = float(cfg.get("max_atr_drop_multiple") or 0.0)
+    if max_drop > 0 and "recent_atr_drop_mult" in current.columns:
+        drop_values = current["recent_atr_drop_mult"]
+        mask_drop = ~(drop_values.fillna(-1.0) >= max_drop)
+        current = current[mask_drop]
+    stats["after_atr_drop"] = int(len(current))
 
     stats["final"] = int(len(current))
     return current, stats

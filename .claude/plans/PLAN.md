@@ -55,6 +55,31 @@
 
 ---
 
+## 급락 차단 필터 추가 ✅ (2026-05-16)
+
+RS 산출 시점에 직전 1~2일 동안 큰 음봉을 맞은 종목을 매수하지 않도록 필터 추가.
+
+### 규칙
+- D-0(오늘) 또는 D-1(어제) 일봉 **종가 하락폭** ≥ 9일 ATR(직전일까지) × `max_atr_drop_multiple` 이면 제외
+- 기본 임계값 **2.5배**, 사이드바 슬라이더 1.0~5.0 + 체크박스로 조정/비활성
+- 분모는 **그 봉의 직전일까지 ATR9** — 큰 하락이 당일 ATR에 즉시 반영돼 필터가 무력화되는 lookahead bias 회피
+
+### 변경 파일
+- `core.py`:
+  - `calc_wilder_atr` 를 ui 에서 옮겨 streamlit-free 영역(core)에 배치, public 노출
+  - 새 헬퍼 `_recent_atr_drop_multiple(prices, atr_period=9, lookback=2)`
+  - `_SCREEN_DF_COLUMNS` 에 `recent_atr_drop_mult` 컬럼 추가, `screen_build_screening_df` 에서 계산
+  - `_default_config` 에 `max_atr_drop_multiple: 2.5`, `screen_apply_filters` 7번째 단계 + `after_atr_drop` 통계
+- `ui.py`:
+  - `calc_wilder_atr` core 에서 import (차트 ATR 계산도 동일 함수 공유)
+  - 사이드바 필터 expander 에 체크박스 + 슬라이더, `filter_config["max_atr_drop_multiple"]` 추가
+  - 파이프라인 배지에 "급락 N", 필터 요약에 "급락 < ATR×2.5" 배지
+
+### 적용 범위
+- 미국·한국 양 자산군 동일 (spec 분기 불필요 — RS 정합성 검사와 같은 위치)
+
+---
+
 ## UI 개편 — 한 화면 통합 + 독립 새로고침 ✅ (2026-05-15)
 
 - **미국 + 한국을 한 화면에**: 자산군 사이드바 탭(`st.pills`) 제거.
