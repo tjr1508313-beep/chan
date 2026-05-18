@@ -80,7 +80,143 @@ def _stamp_url() -> str:
 
 
 def _db_url() -> str:
+    """Legacy 비압축 DB URL (구버전 워크플로우 호환용 폴백)."""
     return f"https://raw.githubusercontent.com/{_repo()}/{_BRANCH}/{_DB_FILENAME}"
+
+
+def _db_gz_url() -> str:
+    """gzip 압축 DB URL — GitHub 100MB 파일 제한 회피용 (정상 경로)."""
+    return f"https://raw.githubusercontent.com/{_repo()}/{_BRANCH}/{_DB_FILENAME}.gz"
+
+
+def _decompress_gz(src: Path, dst: Path) -> None:
+    """gzip 해제: src.gz → dst. src 는 작업 후 삭제."""
+    import gzip
+    with gzip.open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+        while True:
+            chunk = fsrc.read(1 << 20)
+            if not chunk:
+                break
+            fdst.write(chunk)
+    try:
+        src.unlink()
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# DB 다운로드 헬퍼 — .db.gz 우선, legacy .db 폴백
+# ---------------------------------------------------------------------------
+#
+# 반환: (bytes_downloaded, status)
+#   status==None       → 성공, tmp 에 압축 해제된 DB 준비됨
+#   status=="no_remote"     → 양쪽 URL 모두 404
+#   status=="auth_required" → 401/403 (private 레포 토큰 부족)
+#   status=="<에러문자열>"  → 기타 HTTP/네트워크 실패
+
+def _fetch_db_via_requests(tmp: Path, headers: dict, requests_mod) -> tuple[int, str | None]:
+    tmp_gz = tmp.with_suffix(tmp.suffix + ".gz")
+
+    # 1) .db.gz 시도 (정상 경로)
+    try:
+        with requests_mod.get(_db_gz_url(), timeout=_DB_TIMEOUT, stream=True, headers=headers) as resp:
+            if resp.status_code in (401, 403):
+                return (0, "auth_required")
+            if resp.ok:
+                n = 0
+                with open(tmp_gz, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1 << 20):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        n += len(chunk)
+                try:
+                    _decompress_gz(tmp_gz, tmp)
+                except Exception as e:
+                    try:
+                        tmp_gz.unlink()
+                    except OSError:
+                        pass
+                    return (0, f"decompress: {e}")
+                return (n, None)
+            if resp.status_code != 404:
+                return (0, f"HTTP {resp.status_code}")
+    except Exception as e:
+        return (0, str(e))
+
+    # 2) legacy .db 폴백 — 구버전 워크플로우와의 호환
+    with requests_mod.get(_db_url(), timeout=_DB_TIMEOUT, stream=True, headers=headers) as resp:
+        if resp.status_code == 404:
+            return (0, "no_remote")
+        if resp.status_code in (401, 403):
+            return (0, "auth_required")
+        if not resp.ok:
+            return (0, f"HTTP {resp.status_code}")
+        n = 0
+        with open(tmp, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 20):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                n += len(chunk)
+        return (n, None)
+
+
+def _fetch_db_via_urllib(tmp: Path, headers: dict) -> tuple[int, str | None]:
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+
+    tmp_gz = tmp.with_suffix(tmp.suffix + ".gz")
+
+    # 1) .db.gz 시도
+    try:
+        req = Request(_db_gz_url(), headers=headers)
+        n = 0
+        with urlopen(req, timeout=_DB_TIMEOUT) as resp, open(tmp_gz, "wb") as f:
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                n += len(chunk)
+        try:
+            _decompress_gz(tmp_gz, tmp)
+        except Exception as e:
+            try:
+                tmp_gz.unlink()
+            except OSError:
+                pass
+            return (0, f"decompress: {e}")
+        return (n, None)
+    except HTTPError as e:
+        if e.code in (401, 403):
+            return (0, "auth_required")
+        if e.code != 404:
+            return (0, f"HTTP {e.code}")
+        # 404 → legacy 폴백으로 진행
+    except URLError as e:
+        return (0, str(e))
+
+    # 2) legacy .db 폴백
+    try:
+        req = Request(_db_url(), headers=headers)
+        n = 0
+        with urlopen(req, timeout=_DB_TIMEOUT) as resp, open(tmp, "wb") as f:
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                n += len(chunk)
+        return (n, None)
+    except HTTPError as e:
+        if e.code == 404:
+            return (0, "no_remote")
+        if e.code in (401, 403):
+            return (0, "auth_required")
+        return (0, f"HTTP {e.code}")
+    except URLError as e:
+        return (0, str(e))
 
 
 def _get_auth_token() -> str:
@@ -314,36 +450,28 @@ def sync_from_remote(force: bool = False) -> SyncResult:
         _save_local_stamp(result)
         return result
 
-    # 2) DB 받기
+    # 2) DB 받기 — .db.gz 우선, legacy .db 폴백
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = DB_PATH.with_suffix(DB_PATH.suffix + ".tmp")
     try:
-        with requests.get(_db_url(), timeout=_DB_TIMEOUT, stream=True, headers=headers) as resp:
-            if resp.status_code == 404:
-                return SyncResult(status="no_remote", remote_stamp=remote_stamp)
-            if resp.status_code in (401, 403):
-                return SyncResult(
-                    status="auth_required", remote_stamp=remote_stamp,
-                    error=f"HTTP {resp.status_code} — 토큰 권한 부족.",
-                )
-            if not resp.ok:
-                return SyncResult(
-                    status="unreachable",
-                    remote_stamp=remote_stamp,
-                    error=f"HTTP {resp.status_code}",
-                )
-            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            tmp = DB_PATH.with_suffix(DB_PATH.suffix + ".tmp")
-            n = 0
-            with open(tmp, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=1 << 20):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    n += len(chunk)
-            _apply_remote(tmp)
+        n, fetch_status = _fetch_db_via_requests(tmp, headers, requests)
     except Exception as e:
+        return SyncResult(status="error", remote_stamp=remote_stamp, error=str(e))
+
+    if fetch_status == "no_remote":
+        return SyncResult(status="no_remote", remote_stamp=remote_stamp)
+    if fetch_status == "auth_required":
         return SyncResult(
-            status="error", remote_stamp=remote_stamp, error=str(e)
+            status="auth_required", remote_stamp=remote_stamp,
+            error="토큰 권한 부족 / private 레포 권한 만료.",
         )
+    if fetch_status is not None:
+        return SyncResult(status="unreachable", remote_stamp=remote_stamp, error=fetch_status)
+
+    try:
+        _apply_remote(tmp)
+    except Exception as e:
+        return SyncResult(status="error", remote_stamp=remote_stamp, error=str(e))
 
     result = SyncResult(
         status="synced",
@@ -398,27 +526,22 @@ def _sync_with_urllib(force: bool) -> SyncResult:
         _save_local_stamp(result)
         return result
 
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = DB_PATH.with_suffix(DB_PATH.suffix + ".tmp")
     try:
-        req = Request(_db_url(), headers=headers)
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = DB_PATH.with_suffix(DB_PATH.suffix + ".tmp")
-        n = 0
-        with urlopen(req, timeout=_DB_TIMEOUT) as resp, open(tmp, "wb") as f:
-            while True:
-                chunk = resp.read(1 << 20)
-                if not chunk:
-                    break
-                f.write(chunk)
-                n += len(chunk)
+        n, fetch_status = _fetch_db_via_urllib(tmp, headers)
+    except Exception as e:
+        return SyncResult(status="error", remote_stamp=remote_stamp, error=str(e))
+
+    if fetch_status == "no_remote":
+        return SyncResult(status="no_remote", remote_stamp=remote_stamp)
+    if fetch_status == "auth_required":
+        return SyncResult(status="auth_required", remote_stamp=remote_stamp, error=fetch_status)
+    if fetch_status is not None:
+        return SyncResult(status="unreachable", remote_stamp=remote_stamp, error=fetch_status)
+
+    try:
         _apply_remote(tmp)
-    except HTTPError as e:
-        if e.code == 404:
-            return SyncResult(status="no_remote", remote_stamp=remote_stamp)
-        if e.code in (401, 403):
-            return SyncResult(status="auth_required", remote_stamp=remote_stamp, error=f"HTTP {e.code}")
-        return SyncResult(status="unreachable", remote_stamp=remote_stamp, error=f"HTTP {e.code}")
-    except URLError as e:
-        return SyncResult(status="unreachable", remote_stamp=remote_stamp, error=str(e))
     except Exception as e:
         return SyncResult(status="error", remote_stamp=remote_stamp, error=str(e))
 

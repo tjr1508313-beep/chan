@@ -3,6 +3,8 @@ screening_cache.db
 screening_cache.db-wal
 screening_cache.db-shm
 screening_cache.db.tmp
+screening_cache.db.gz
+screening_cache.db.bak
 .remote_cache_stamp.json
 *.parquet
 cache/

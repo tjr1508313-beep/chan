@@ -34,6 +34,7 @@ from .cache import (
 )
 from .cache_sync import get_last_sync_info, has_auth_token, sync_from_remote
 from .core import (
+    calc_wilder_atr,
     screen_apply_filters,
     screen_build_screening_df,
     screen_filter_by_index_lag,
@@ -162,41 +163,6 @@ def _get_index_period_info(index_code: str, rs_period: int) -> dict | None:
         "end_close": end_close,
         "return_pct": (end_close / start_close - 1.0) * 100.0,
     }
-
-
-def _calc_wilder_atr(
-    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 9
-) -> pd.Series:
-    """Wilder's ATR.
-
-    TR_t  = max(H-L, |H - prevC|, |L - prevC|)
-    ATR_t = (ATR_{t-1} * (period - 1) + TR_t) / period
-    초기값: 첫 `period` 일의 TR 단순평균으로 부트스트랩.
-    """
-    prev_close = close.shift(1)
-    tr = pd.concat(
-        [
-            (high - low).abs(),
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-
-    nan = float("nan")
-    atr = pd.Series(nan, index=tr.index, dtype=float)
-    if len(tr) < period:
-        return atr
-
-    initial = tr.iloc[1 : period + 1].mean()
-    atr.iloc[period] = initial
-    for i in range(period + 1, len(tr)):
-        prev_atr = atr.iloc[i - 1]
-        tr_i = tr.iloc[i]
-        if pd.isna(prev_atr) or pd.isna(tr_i):
-            continue
-        atr.iloc[i] = (prev_atr * (period - 1) + tr_i) / period
-    return atr
 
 
 # ─── 자산군 spec dict ───────────────────────────────────────────────
@@ -428,6 +394,23 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
                 key=_key(spec, "filter_max_range_pct"),
                 help="이 값 이상 변동한 날이 있는 종목은 제외.",
             )
+            exclude_atr_drop = st.checkbox(
+                "최근 1~2일 급락 종목 제외",
+                value=True,
+                key=_key(spec, "filter_exclude_atr_drop"),
+                help=(
+                    "당일(D-0) 또는 전일(D-1) 종가 하락폭이 "
+                    "9일 ATR × 임계값 이상이면 제외. "
+                    "ATR 은 lookahead 방지를 위해 직전일까지의 값 사용."
+                ),
+            )
+            atr_drop_mult = st.slider(
+                "급락 한도 (9일 ATR × 배수)",
+                min_value=1.0, max_value=5.0, value=2.5, step=0.1,
+                key=_key(spec, "filter_atr_drop_mult"),
+                disabled=not exclude_atr_drop,
+                help="값이 작을수록 더 많이 거름. 기본 2.5배.",
+            )
             exclude_china = False
             if spec["show_china_filter"]:
                 exclude_china = st.checkbox(
@@ -451,6 +434,7 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
             "min_dollar_volume": spec["min_dv_to_raw"](min_dv),
             "min_market_cap": float(min_mc_raw),
             "max_daily_range_pct": float(max_range_pct) / 100.0,
+            "max_atr_drop_multiple": float(atr_drop_mult) if exclude_atr_drop else 0.0,
             "exclude_china": bool(exclude_china),
             "exclude_risk": bool(exclude_risk),
         }
@@ -709,6 +693,9 @@ def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
         f"중국 {stats.get('after_china', 0)}",
         f"변동성 {stats.get('after_volatility', 0)}",
     ])
+    after_atr_drop = stats.get("after_atr_drop")
+    if after_atr_drop is not None and after_atr_drop != stats.get("after_volatility"):
+        parts.append(f"급락 {after_atr_drop}")
     lag_excluded = stats.get("lag_excluded", 0)
     if lag_excluded:
         parts.append(f"지연 -{lag_excluded}")
@@ -733,6 +720,9 @@ def _render_filter_summary(spec: dict, cfg: dict) -> None:
     if min_mc > 0 and "min_marketcap_summary_fmt" in spec:
         badges.append(spec["min_marketcap_summary_fmt"](min_mc))
     badges.append(f"변동폭 < {cfg['max_daily_range_pct']*100:.0f}%")
+    max_drop = cfg.get("max_atr_drop_multiple", 0) or 0
+    if max_drop > 0:
+        badges.append(f"급락 < ATR×{max_drop:.1f}")
     if spec["show_china_filter"] and cfg.get("exclude_china"):
         badges.append("중국 제외")
     if cfg.get("exclude_risk"):
@@ -826,7 +816,7 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
         return
 
     ma5 = df["Close"].rolling(5).mean()
-    atr9 = _calc_wilder_atr(df["High"], df["Low"], df["Close"], period=9)
+    atr9 = calc_wilder_atr(df["High"], df["Low"], df["Close"], period=9)
 
     df_view = df.tail(lookback_days)
     ma5_view = ma5.reindex(df_view.index)

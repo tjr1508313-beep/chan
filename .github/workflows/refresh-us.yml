@@ -45,11 +45,15 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          URL="https://raw.githubusercontent.com/${{ github.repository }}/data-cache/screening_cache.db"
-          echo "Trying $URL"
-          if curl -fsSL -o screening_cache.db "$URL"; then
-            echo "Cache downloaded: $(du -h screening_cache.db | cut -f1)"
+          BASE="https://raw.githubusercontent.com/${{ github.repository }}/data-cache"
+          # 새 포맷(.gz) 우선, 없으면 legacy .db 폴백.
+          if curl -fsSL -o screening_cache.db.gz "$BASE/screening_cache.db.gz"; then
+            gunzip -f screening_cache.db.gz
+            echo "Cache (gz) downloaded: $(du -h screening_cache.db | cut -f1)"
+          elif curl -fsSL -o screening_cache.db "$BASE/screening_cache.db"; then
+            echo "Cache (legacy .db) downloaded: $(du -h screening_cache.db | cut -f1)"
           else
+            rm -f screening_cache.db.gz screening_cache.db
             echo "No existing cache (first run). Will create fresh."
           fi
 
@@ -85,14 +89,18 @@ jobs:
           echo "kst=$NOW_KST" >> last_updated.txt
           echo "summary=${{ steps.summary.outputs.summary }}" >> last_updated.txt
 
+          # GitHub 100MB 파일 제한 회피 — gzip 압축 후 push (보통 130MB→~40MB).
+          gzip -9 -f screening_cache.db
+          ls -lh screening_cache.db.gz
+
           # orphan 강제 푸시 — 히스토리 1개만 유지
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout --orphan data-cache-tmp
           git rm -rf --cached . > /dev/null 2>&1 || true
           # working tree 정리하지 말 것 — DB 파일 보존.
-          # -f 필수: main 의 .gitignore 가 screening_cache.db 를 무시 룰로 잡고 있음.
-          git add -f screening_cache.db last_updated.txt
+          # -f 필수: main 의 .gitignore 가 screening_cache.db* 를 무시 룰로 잡고 있음.
+          git add -f screening_cache.db.gz last_updated.txt
           git commit -m "US refresh $NOW_KST"
           git push --force origin HEAD:data-cache
 

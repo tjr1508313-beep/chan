@@ -23,6 +23,10 @@
 6. **외국기업 제외** (한국주식 한정 — 모집단 단계 정적 제거, 2026-04-28)
 7. **최근 20일 내 일일 변동폭 50% 이상 종목 제외** (급등락 종목 배제)
 8. **모집단 정적 제외** (한국주식 한정): 우선주 / 리츠 / ETF / 스팩 (RS 의미가 다름 — 2026-04-28)
+9. **최근 1~2일 급락 종목 제외** (2026-05-16)
+   - D-0/D-1 일봉 종가 하락폭 ≥ 9일 ATR(직전일까지) × **2.5배** 이면 제외
+   - 분모는 lookahead 방지를 위해 그 봉의 직전일까지의 ATR9 사용
+   - 사이드바 슬라이더(1.0~5.0)·체크박스로 조정/비활성 가능
 
 ## 개발 단계
 > 상세 내역은 `.claude/plans/PLAN.md` 참고.
@@ -45,8 +49,10 @@
   - KR: 평일 KST 15:40 (cron `40 6 * * 1-5`)
   - US: 평일 KST 07:00 (cron `0 22 * * 0-4`)
 - 갱신 범위 = **지수 + 시세만** (메타데이터 제외, TTL 7일이라 수동)
+- DB 파일은 GitHub 100MB 제한 회피 위해 **`screening_cache.db.gz` (gzip -9)** 로 push
+  (2026-05-18 — 미국 130MB → 약 41MB). cache_sync 는 `.gz` 우선, legacy `.db` 폴백.
 - 로컬 앱 시작 시 `screening/cache_sync.py` 가 `last_updated.txt` 확인 후
-  `screening_cache.db` 자동 다운로드 (변경 있을 때만)
+  `screening_cache.db.gz` 자동 다운로드 + 해제 (변경 있을 때만)
 - 실패 시 텔레그램 알림 (Secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`)
 - **Private 레포 → 로컬 PAT 필요** (`SCREENING_CACHE_TOKEN` 환경변수 또는
   `.streamlit/secrets.toml` 의 `github_cache_token`). Contents:Read-only 권한만.
