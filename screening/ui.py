@@ -848,6 +848,11 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
         "low": df_view["Low"].values,
         "close": df_view["Close"].values,
     }).dropna()
+    # LWC 는 open/close 가 high/low 범위 밖이면 ValueValidationError 를 던진다.
+    # FDR 한국 데이터에서 가끔 발생 — high/low 만 OHLC 4값 max/min 으로 보정 (open/close 보존).
+    ohlc = candle_df[["open", "high", "low", "close"]]
+    candle_df["high"] = ohlc.max(axis=1)
+    candle_df["low"] = ohlc.min(axis=1)
 
     candle = CandlestickSeries(
         data=candle_df,
