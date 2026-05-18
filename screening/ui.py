@@ -112,7 +112,7 @@ def ui_load_ranked_df(
 
     ranked = screen_rank_rs(passing, index_code, period=rs_period, top_n=top_n)
     if not ranked.empty:
-        meta_cols = filtered[["name_en", "name_kr", "avg_dollar_volume_20d", "market_cap"]]
+        meta_cols = filtered[["name_en", "name_kr", "avg_traded_value_20d", "market_cap"]]
         ranked = ranked.merge(meta_cols, left_on="ticker", right_index=True, how="left")
     return ranked, stats
 
@@ -431,7 +431,7 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
 
         filter_config = {
             "min_price": float(min_price),
-            "min_dollar_volume": spec["min_dv_to_raw"](min_dv),
+            "min_traded_value": spec["min_dv_to_raw"](min_dv),
             "min_market_cap": float(min_mc_raw),
             "max_daily_range_pct": float(max_range_pct) / 100.0,
             "max_atr_drop_multiple": float(atr_drop_mult) if exclude_atr_drop else 0.0,
@@ -714,7 +714,7 @@ def _render_filter_summary(spec: dict, cfg: dict) -> None:
     """현재 필터 조건 한 줄 배지."""
     badges = [
         f"주가 {spec['min_price_summary_fmt'](cfg['min_price'])}",
-        f"거래대금 {spec['min_dv_summary_fmt'](cfg['min_dollar_volume'])}",
+        f"거래대금 {spec['min_dv_summary_fmt'](cfg['min_traded_value'])}",
     ]
     min_mc = cfg.get("min_market_cap", 0)
     if min_mc > 0 and "min_marketcap_summary_fmt" in spec:
@@ -776,8 +776,8 @@ def _render_ranking_table(
 
     # 거래대금
     dv_label = spec["dv_label"]
-    if "avg_dollar_volume_20d" in ranked.columns:
-        display[dv_label] = ranked["avg_dollar_volume_20d"] / spec["dv_divisor"]
+    if "avg_traded_value_20d" in ranked.columns:
+        display[dv_label] = ranked["avg_traded_value_20d"] / spec["dv_divisor"]
     else:
         display[dv_label] = pd.Series([float("nan")] * len(ranked))
     column_config[dv_label] = st.column_config.NumberColumn(format=spec["dv_col_format"])
@@ -916,10 +916,10 @@ def _render_chart_metrics(spec: dict, df: pd.DataFrame, atr9: pd.Series) -> None
     else:
         ret_display = "—"
 
-    dv = df.get("dollar_volume")
-    if dv is not None and dv.dropna().shape[0] > 0:
-        avg_dv = float(dv.tail(20).mean()) / spec["dv_divisor"]
-        dv_display = spec["dv_metric_fmt"](avg_dv)
+    tv = df.get("traded_value")
+    if tv is not None and tv.dropna().shape[0] > 0:
+        avg_tv = float(tv.tail(20).mean()) / spec["dv_divisor"]
+        dv_display = spec["dv_metric_fmt"](avg_tv)
     else:
         dv_display = "—"
 

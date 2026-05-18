@@ -11,7 +11,7 @@
 
 필터 조건 (모두 AND, 순서 고정):
     1. 주가 >= min_price (미국 $10 / 한국 1,000원)
-    2. 20일 평균 거래대금 >= min_dollar_volume (미국 $20M / 한국 300억 원)
+    2. 20일 평균 거래대금 >= min_traded_value (미국 $20M / 한국 300억 원)
     3. 시가총액 >= min_market_cap (0=미적용 / 한국 권장 3e11)
     4. 관리종목/위험종목 제외 (`meta.is_risk == True` 제외)
     5. 중국기업 제외 (`is_china_ticker` 또는 `meta.is_china`) — 미국 한정
@@ -55,7 +55,7 @@ _RS_EPSILON: float = 1e-9
 
 _SCREEN_DF_COLUMNS = [
     "last_price",
-    "avg_dollar_volume_20d",
+    "avg_traded_value_20d",
     "max_daily_range_20d",
     "recent_atr_drop_mult",
     "market_cap",
@@ -158,11 +158,11 @@ def _max_daily_range(prices: pd.DataFrame, lookback: int) -> float:
     return float(rng.max())
 
 
-def _avg_dollar_volume(prices: pd.DataFrame, lookback: int) -> float:
-    """최근 `lookback` 영업일 평균 거래대금. 없으면 NaN."""
-    if prices is None or prices.empty or "dollar_volume" not in prices.columns:
+def _avg_traded_value(prices: pd.DataFrame, lookback: int) -> float:
+    """최근 `lookback` 영업일 평균 거래대금 (USD/KRW). 없으면 NaN."""
+    if prices is None or prices.empty or "traded_value" not in prices.columns:
         return float("nan")
-    tail = prices["dollar_volume"].tail(lookback).dropna()
+    tail = prices["traded_value"].tail(lookback).dropna()
     if tail.empty:
         return float("nan")
     return float(tail.mean())
@@ -211,7 +211,7 @@ def screen_build_screening_df(
             continue
 
         last_price = _last_close(prices)
-        avg_dv = _avg_dollar_volume(prices, lookback_days)
+        avg_tv = _avg_traded_value(prices, lookback_days)
         max_rng = _max_daily_range(prices, lookback_days)
         recent_drop_mult = _recent_atr_drop_multiple(prices, atr_period=9, lookback=2)
 
@@ -233,7 +233,7 @@ def screen_build_screening_df(
             {
                 "ticker": t,
                 "last_price": last_price,
-                "avg_dollar_volume_20d": avg_dv,
+                "avg_traded_value_20d": avg_tv,
                 "max_daily_range_20d": max_rng,
                 "recent_atr_drop_mult": recent_drop_mult,
                 "market_cap": market_cap,
@@ -261,7 +261,7 @@ def screen_build_screening_df(
 def _default_config() -> dict:
     return {
         "min_price": 10.0,
-        "min_dollar_volume": 20_000_000.0,
+        "min_traded_value": 20_000_000.0,
         "min_market_cap": 0.0,           # 0 = 미적용. 한국주식은 3,000억(3e11) 권장
         "max_daily_range_pct": 0.50,
         "max_atr_drop_multiple": 2.5,    # 0 = 비활성. D-0/D-1 종가 하락 / ATR9_prev
@@ -278,7 +278,7 @@ def screen_apply_filters(
 
     Args:
         df: `screen_build_screening_df()` 결과 형태의 wide DataFrame.
-            필요한 컬럼: last_price, avg_dollar_volume_20d, max_daily_range_20d,
+            필요한 컬럼: last_price, avg_traded_value_20d, max_daily_range_20d,
                          is_china, is_risk.
         config: 필터 기준. `None` 이면 기본값.
 
@@ -318,7 +318,7 @@ def screen_apply_filters(
     stats["after_price"] = int(len(current))
 
     # 2) 거래대금
-    mask_vol = current["avg_dollar_volume_20d"].fillna(-1.0) >= float(cfg["min_dollar_volume"])
+    mask_vol = current["avg_traded_value_20d"].fillna(-1.0) >= float(cfg["min_traded_value"])
     current = current[mask_vol]
     stats["after_volume"] = int(len(current))
 

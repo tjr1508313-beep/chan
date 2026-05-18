@@ -47,7 +47,7 @@ description: RS(상대강도) 계산, 필터링 로직, 랭킹, 데이터 캐시
 
 ## DB/캐시 설계 방향
 ```
-prices (ticker, date, open, high, low, close, volume, dollar_volume)
+prices (ticker, date, open, high, low, close, volume, traded_value)
 metadata (ticker, name_kr, name_en, sector, country, is_china, is_risk)
 index_prices (index_code, date, close)  -- ^IXIC(NASDAQ), ^GSPC(S&P500)
 settings (key, value)  -- RS 기간, 필터 기준 등 사용자 설정

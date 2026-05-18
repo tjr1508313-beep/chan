@@ -4,8 +4,9 @@
 통합 시에도 DB 파일은 분리 유지 권장.
 
 스키마:
-    prices (ticker, date, open, high, low, close, volume, dollar_volume)
+    prices (ticker, date, open, high, low, close, volume, traded_value)
         PK: (ticker, date)
+        - traded_value = close × volume (미국 USD / 한국 KRW 거래대금)
     metadata (ticker, name_en, name_kr, sector, country, exchange,
               market_cap, is_china, is_risk, updated_at)
         PK: ticker
@@ -62,14 +63,14 @@ def _connect() -> Iterator[sqlite3.Connection]:
 
 _DDL_PRICES = """
 CREATE TABLE IF NOT EXISTS prices (
-    ticker        TEXT NOT NULL,
-    date          TEXT NOT NULL,
-    open          REAL,
-    high          REAL,
-    low           REAL,
-    close         REAL,
-    volume        REAL,
-    dollar_volume REAL,
+    ticker       TEXT NOT NULL,
+    date         TEXT NOT NULL,
+    open         REAL,
+    high         REAL,
+    low          REAL,
+    close        REAL,
+    volume       REAL,
+    traded_value REAL,
     PRIMARY KEY (ticker, date)
 )
 """
@@ -105,13 +106,26 @@ _DDL_INDEXES = [
 
 
 def init_cache() -> None:
-    """SQLite 캐시 DB 초기화 (테이블 없으면 생성)."""
+    """SQLite 캐시 DB 초기화 (테이블 없으면 생성 + 구 스키마 마이그레이션)."""
     with _connect() as conn:
         conn.execute(_DDL_PRICES)
         conn.execute(_DDL_METADATA)
         conn.execute(_DDL_INDEX_PRICES)
         for ddl in _DDL_INDEXES:
             conn.execute(ddl)
+        _migrate_dollar_volume_column(conn)
+
+
+def _migrate_dollar_volume_column(conn: sqlite3.Connection) -> None:
+    """구 컬럼명 `dollar_volume` → `traded_value` 일회성 리네임.
+
+    원격 동기화로 들어오는 구 스키마 DB(워크플로우 갱신 전)도 처리하도록
+    `init_cache()` 매 호출 시 검사. 신규 DB 는 이미 새 컬럼명이라 noop.
+    SQLite 3.25+ RENAME COLUMN 사용 (Python 3.7+ 표준 동봉 SQLite 충족).
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(prices)").fetchall()}
+    if "dollar_volume" in cols and "traded_value" not in cols:
+        conn.execute("ALTER TABLE prices RENAME COLUMN dollar_volume TO traded_value")
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +153,7 @@ def _utc_now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 def cache_save_prices(ticker: str, df: pd.DataFrame) -> None:
-    """시세 upsert. `dollar_volume = close * volume` 자동 계산.
+    """시세 upsert. `traded_value = close * volume` 자동 계산 (USD/KRW 거래대금).
 
     Args:
         ticker: 종목 티커 (대문자로 정규화).
@@ -160,7 +174,7 @@ def cache_save_prices(ticker: str, df: pd.DataFrame) -> None:
 
     close = col("Close")
     volume = col("Volume")
-    dollar_volume = close * volume
+    traded_value = close * volume
 
     rows = [
         (
@@ -171,17 +185,17 @@ def cache_save_prices(ticker: str, df: pd.DataFrame) -> None:
             None if pd.isna(l) else float(l),
             None if pd.isna(c) else float(c),
             None if pd.isna(v) else float(v),
-            None if pd.isna(dv) else float(dv),
+            None if pd.isna(tv) else float(tv),
         )
-        for date_str, o, h, l, c, v, dv in zip(
+        for date_str, o, h, l, c, v, tv in zip(
             norm.index, col("Open"), col("High"), col("Low"),
-            close, volume, dollar_volume,
+            close, volume, traded_value,
         )
     ]
 
     sql = (
         "INSERT OR REPLACE INTO prices "
-        "(ticker, date, open, high, low, close, volume, dollar_volume) "
+        "(ticker, date, open, high, low, close, volume, traded_value) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
     with _connect() as conn:
@@ -196,20 +210,20 @@ def cache_load_prices(ticker: str, days: int | None = None) -> pd.DataFrame:
         days: 최근 N영업일만 반환. None 이면 전체.
 
     Returns:
-        index=DatetimeIndex, columns=[Open, High, Low, Close, Volume, dollar_volume] DataFrame.
+        index=DatetimeIndex, columns=[Open, High, Low, Close, Volume, traded_value] DataFrame.
         데이터 없으면 빈 DF.
     """
     t = ticker.strip().upper()
     with _connect() as conn:
         df = pd.read_sql_query(
-            "SELECT date, open, high, low, close, volume, dollar_volume "
+            "SELECT date, open, high, low, close, volume, traded_value "
             "FROM prices WHERE ticker = ? ORDER BY date ASC",
             conn,
             params=(t,),
         )
 
     if df.empty:
-        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume", "dollar_volume"])
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume", "traded_value"])
 
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date").sort_index()

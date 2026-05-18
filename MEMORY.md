@@ -51,7 +51,7 @@ C:\스크리닝\
 
 ### `screening/cache.py` (SQLite — 미국+한국 공유)
 - DB: `screening_cache.db` (프로젝트 루트 고정)
-- 테이블: `prices` (+dollar_volume 자동 — 한국에선 원화 거래대금), `metadata`, `index_prices`, `settings`
+- 테이블: `prices` (+traded_value 자동 — 미국 USD / 한국 KRW 거래대금), `metadata`, `index_prices`, `settings`
 - CRUD: `cache_save_prices/load_prices/save_meta/load_meta/save_index/load_index`
 - 증분 커서: `cache_get_last_price_date`, `cache_get_last_index_date`
 - 일괄 조회: `cache_get_all_last_price_dates()` — 한 SQL 로 모든 ticker 마지막일 (stale-first 정렬용)
@@ -118,7 +118,7 @@ C:\스크리닝\
 4. **한국 위험종목 필터 보류** — KRX 공시 익명 차단, pykrx 인증 필요, DART API 키 미설정. 사이드바 체크박스만 살아있음 (실제 적용 안 됨)
 5. **한국 corporate action 자동 감지 미구현** — FDR 에 splits API 없음. 사용자가 force 수동 또는 stale-first 정렬에 의지 (미국은 2026-05-06 자동화 완료)
 6. ~~**종목/지수 마지막일 미스매치 시 RS 시간 정합성 잃음**~~ — `screen_filter_by_index_lag` 로 해결됨 (2026-05-06)
-7. **`dollar_volume` 컬럼명 한국에서 의미 어색** — 실제로는 원화 거래대금. Phase 4 통합 시 `traded_value` 등으로 일반화 검토
+7. ~~**`dollar_volume` 컬럼명 한국에서 의미 어색**~~ — `traded_value` 로 통일 완료 (2026-05-18). `init_cache()` 마이그레이션이 구 DB 자동 변환.
 8. **차트 함수 미국/한국 중복** — `_us_render_chart` / `_kr_render_chart` 별도. 통화 단위만 다름. 추후 `_render_chart_panel(currency_symbol, price_format, dv_unit)` 일반화 후보
 9. **한글 종목명** (미국) — 69종 시드, 필요 시 `data/us_ticker_kr.csv`에 추가
 10. **Streamlit removeChild 워닝** — column 구조 hot reload 시 발생. Ctrl+Shift+R 로 해결
