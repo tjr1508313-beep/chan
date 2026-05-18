@@ -10,7 +10,7 @@ GitHub Actions  (월~금)
    KR  15:40 KST  →  scripts/refresh_cache.py --market kr
    US  07:00 KST  →  scripts/refresh_cache.py --market us
         ↓
-   data-cache 브랜치(orphan)에 screening_cache.db, last_updated.txt 강제 푸시
+   data-cache 브랜치(orphan)에 screening_cache.db.gz, last_updated.txt 강제 푸시
         ↓
 로컬 PC: 앱 시작 시 cache_sync 가 자동으로 data-cache 의 stamp 확인
    → 로컬 < 원격 이면 DB 다운로드 후 교체
@@ -40,11 +40,13 @@ GitHub Actions  (월~금)
 
 ```powershell
 # 현재 로컬 캐시를 data-cache 브랜치 초기값으로 푸시
+# (GitHub 100MB 파일 제한 회피 — 압축해서 .db.gz 로 푸시)
 git checkout --orphan data-cache
-git rm -rf --cached . 
+git rm -rf --cached .
+python -c "import gzip,shutil; shutil.copyfileobj(open('screening_cache.db','rb'), gzip.open('screening_cache.db.gz','wb',9))"
 "$(Get-Date -AsUTC -Format o)" | Out-File -Encoding utf8 last_updated.txt
 "market=manual" | Add-Content -Encoding utf8 last_updated.txt
-git add screening_cache.db last_updated.txt
+git add screening_cache.db.gz last_updated.txt
 git commit -m "initial cache snapshot"
 git push --force origin data-cache
 git checkout main

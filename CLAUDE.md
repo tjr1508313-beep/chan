@@ -49,8 +49,10 @@
   - KR: 평일 KST 15:40 (cron `40 6 * * 1-5`)
   - US: 평일 KST 07:00 (cron `0 22 * * 0-4`)
 - 갱신 범위 = **지수 + 시세만** (메타데이터 제외, TTL 7일이라 수동)
+- DB 파일은 GitHub 100MB 제한 회피 위해 **`screening_cache.db.gz` (gzip -9)** 로 push
+  (2026-05-18 — 미국 130MB → 약 41MB). cache_sync 는 `.gz` 우선, legacy `.db` 폴백.
 - 로컬 앱 시작 시 `screening/cache_sync.py` 가 `last_updated.txt` 확인 후
-  `screening_cache.db` 자동 다운로드 (변경 있을 때만)
+  `screening_cache.db.gz` 자동 다운로드 + 해제 (변경 있을 때만)
 - 실패 시 텔레그램 알림 (Secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`)
 - **Private 레포 → 로컬 PAT 필요** (`SCREENING_CACHE_TOKEN` 환경변수 또는
   `.streamlit/secrets.toml` 의 `github_cache_token`). Contents:Read-only 권한만.
