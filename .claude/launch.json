@@ -4,8 +4,8 @@
     {
       "name": "screening",
       "runtimeExecutable": "streamlit",
-      "runtimeArgs": ["run", "screening.py", "--server.headless=true", "--server.port=8765"],
-      "port": 8765
+      "runtimeArgs": ["run", "screening.py", "--server.headless=true", "--server.port=8768"],
+      "port": 8768
     }
   ]
 }

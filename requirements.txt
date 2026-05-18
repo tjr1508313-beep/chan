@@ -1,6 +1,6 @@
 streamlit>=1.40
 pandas>=2.0
-plotly>=5.18
+streamlit-lightweight-charts-pro>=0.3
 yfinance>=0.2.40
 finance-datareader>=0.9.80
 numpy>=1.24

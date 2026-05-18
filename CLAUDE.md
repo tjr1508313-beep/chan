@@ -59,15 +59,16 @@
 ## 기술 스택
 - Python
 - Streamlit (웹 UI)
-- 데이터 소스 (미정 — yfinance 무료 / Finnhub / Polygon 등 비교 후 결정)
-- Plotly, Pandas (차트 및 계산)
-- SQLite or Parquet 캐시 (일일 시세 저장용, API 호출 절약)
+- 데이터 소스: 미국 = `yfinance`, 한국 = `FinanceDataReader`
+- 차트: `streamlit-lightweight-charts-pro` (TradingView lightweight-charts 래퍼 — 2026-05-18 Plotly 에서 교체)
+- Pandas (계산)
+- SQLite 캐시 (`screening_cache.db`)
 
 ## 원하는 주요 기능 (사용자 요구사항)
 1. **나스닥 RS Top 20** — 기준 기간 슬라이더(기본 20일, 조정 가능)
 2. **S&P 500 RS Top 20** — 동일 방식
 3. **종목 정보 표시**: 티커 + 한글명 + 현재가
-4. **차트**: 5일 이평선 + 9일 ATR 오버레이
+4. **차트**: 캔들 + MA5/MA20/MA60 + 9일 ATR 패널 (TradingView 스타일)
 
 ## 에이전트 구성
 - **스크리닝 백엔드** — RS 계산, 필터링 로직, 랭킹, 통계

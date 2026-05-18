@@ -82,10 +82,13 @@ C:\스크리닝\
 - `screen_rank_rs(tickers, index_code, period=20, top_n=20) -> DataFrame`
 
 ### `screening/ui.py` (UI)
-- `render_asset_selector()` — 사이드바 최상단 `st.pills` (미국/한국/코인)
-- `render_us_tab()` / `render_kr_tab()` / `render_crypto_tab()` — 자산군별 탭
-- 한국 전용 헬퍼: `_render_sidebar_kr` / `_run_refresh_kr` / `_render_ranking_table_kr` / `_kr_render_chart`
-- 공유 헬퍼: `_render_rs_header` (RS Top N 헤더 + 지수 N일 수익률), `_render_pipeline_badge` (필터 축소 흐름), `_sort_tickers_stale_first` (stale starvation 방지)
+- `render_screening_page()` — 미국/한국 한 화면 위·아래 배치 진입점
+- spec dict 기반 공통화 (`_US_SPEC`, `_KR_SPEC`)
+- 공유 헬퍼: `_render_screening_section`, `_render_sidebar`, `_render_rs_header`,
+  `_render_pipeline_badge`, `_render_filter_summary`, `_render_ranking_table`,
+  `_render_chart`, `_render_chart_metrics`, `_sort_tickers_stale_first`
+- 차트: `streamlit-lightweight-charts-pro` 의 `Chart(series=[Candle+MA5/20/60+ATR])`
+  로 통합. 5 시리즈 / 2 pane(price:ATR = 3:1) — 2026-05-18 Plotly 에서 교체
 
 ## 확정된 결정 사항
 
@@ -119,16 +122,16 @@ C:\스크리닝\
 5. **한국 corporate action 자동 감지 미구현** — FDR 에 splits API 없음. 사용자가 force 수동 또는 stale-first 정렬에 의지 (미국은 2026-05-06 자동화 완료)
 6. ~~**종목/지수 마지막일 미스매치 시 RS 시간 정합성 잃음**~~ — `screen_filter_by_index_lag` 로 해결됨 (2026-05-06)
 7. ~~**`dollar_volume` 컬럼명 한국에서 의미 어색**~~ — `traded_value` 로 통일 완료 (2026-05-18). `init_cache()` 마이그레이션이 구 DB 자동 변환.
-8. **차트 함수 미국/한국 중복** — `_us_render_chart` / `_kr_render_chart` 별도. 통화 단위만 다름. 추후 `_render_chart_panel(currency_symbol, price_format, dv_unit)` 일반화 후보
+8. ~~**차트 함수 미국/한국 중복**~~ — `_render_chart(spec, ...)` 단일 함수로 통합 완료 (자산군 spec dict 분기). 2026-05-18 LWC 교체와 함께 정리.
 9. **한글 종목명** (미국) — 69종 시드, 필요 시 `data/us_ticker_kr.csv`에 추가
 10. **Streamlit removeChild 워닝** — column 구조 hot reload 시 발생. Ctrl+Shift+R 로 해결
 11. **장중 실시간 조회 미지원** — 일 1회 배치만
 
-## 다음 작업 후보 (2026-05-06 갱신 — corporate action 완료)
-1. **차트 함수 `_render_chart_panel` 일반화** (currency_symbol, price_format, dv_unit 인자화) — `_us_render_chart` / `_kr_render_chart` 중복 -150줄 제거
-2. **`max_lag_days` 사이드바 슬라이더 노출** — 현재 0 하드코딩, 사용자가 너무 엄격하다 느끼면 1~5 조정 가능하게
-3. **위험종목 데이터 소스 결정** — KRX 회원 ID/PW 또는 DART API 키 셋업 후 `kr_risk.py` 추가
-4. **한국 분할 감지** — FDR 자체 splits API 없음. KRX 공시 또는 가격 점프 휴리스틱으로 우회 검토
+## 다음 작업 후보 (2026-05-18 갱신 — 차트 LWC 교체 / 컬럼명 일반화 완료)
+1. **`max_lag_days` 사이드바 슬라이더 노출** — 현재 0 하드코딩, 사용자가 너무 엄격하다 느끼면 1~5 조정 가능하게
+2. **위험종목 데이터 소스 결정** — KRX 회원 ID/PW 또는 DART API 키 셋업 후 `kr_risk.py` 추가
+3. **한국 분할 감지** — FDR 자체 splits API 없음. KRX 공시 또는 가격 점프 휴리스틱으로 우회 검토
+4. **차트 인터랙션 강화** — LWC 의 tooltip / 범례 / range switcher 옵션 활용 검토
 5. **Phase 2 며칠 사용 후 피드백 모아 → Phase 3 코인 착수**
 6. **(보류) 클라우드 호스팅** — Oracle/Fly 모두 막힘. 무료+영속+24/7 옵션 사라짐. 비번 코드는 미리 둠
 

@@ -17,9 +17,16 @@ import time
 from typing import Any
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
+from lightweight_charts_pro.charts.options.line_options import LineOptions
+from streamlit_lightweight_charts_pro import (
+    CandlestickSeries,
+    Chart,
+    ChartOptions,
+    LayoutOptions,
+    LineSeries,
+    PaneHeightOptions,
+)
 
 from .batch import screen_refresh_index, screen_refresh_meta, screen_refresh_prices
 from .batch_kr import (
@@ -53,11 +60,12 @@ from .theme import (
 
 
 # ─── 차트 색상 (자산군 무관) ────────────────────────────────────────────
-_COLOR_UP = COLOR_PROFIT       # #ff4b4b
-_COLOR_DOWN = COLOR_LOSS        # #1a9cff
-_COLOR_MA = "#ff9500"           # 5일 이평선 (주황)
-_COLOR_ATR = "#6366f1"          # 9일 ATR (인디고)
-_COLOR_ATR_FILL = "rgba(99, 102, 241, 0.15)"
+_COLOR_UP = COLOR_PROFIT       # #ff4b4b 캔들 양봉 (한국식)
+_COLOR_DOWN = COLOR_LOSS        # #1a9cff 캔들 음봉
+_COLOR_MA5 = "#ff9500"          # 5일 이평선 (주황) — 단기
+_COLOR_MA20 = "#22c55e"         # 20일 이평선 (초록) — 중기
+_COLOR_MA60 = "#a855f7"         # 60일 이평선 (보라) — 장기
+_COLOR_ATR = "#6366f1"          # 9일 ATR (인디고) — 하단 패널
 
 # 지수 코드 → 사용자 친화 이름
 _INDEX_DISPLAY = {
@@ -804,8 +812,9 @@ def _render_ranking_table(
 # ─── 차트 패널 ───────────────────────────────────────────────────────
 
 def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
-    """선택된 티커의 캔들 + 5MA + 9ATR 차트."""
-    df = ui_load_chart_df(ticker, days=lookback_days + 10)
+    """선택된 티커의 캔들 + MA5/MA20/MA60 + 9ATR 패널 (TradingView lightweight-charts)."""
+    # MA60 까지 그리려면 view 시작점 직전 60일 + 안전 버퍼 필요
+    df = ui_load_chart_df(ticker, days=lookback_days + 70)
 
     if df is None or len(df) < 15:
         st.warning(
@@ -816,83 +825,84 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
         return
 
     ma5 = df["Close"].rolling(5).mean()
+    ma20 = df["Close"].rolling(20).mean()
+    ma60 = df["Close"].rolling(60).mean()
     atr9 = calc_wilder_atr(df["High"], df["Low"], df["Close"], period=9)
 
     df_view = df.tail(lookback_days)
-    ma5_view = ma5.reindex(df_view.index)
-    atr9_view = atr9.reindex(df_view.index)
-
     last_close = float(df_view["Close"].iloc[-1])
     last_date = df_view.index[-1].strftime("%Y-%m-%d")
-    title = f"{ticker} · {spec['price_chart_fmt'](last_close)} ({last_date})"
-
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True,
-        row_heights=[0.7, 0.3], vertical_spacing=0.05,
-        subplot_titles=("", "9-day ATR (Wilder)"),
-    )
-    fig.add_trace(
-        go.Candlestick(
-            x=df_view.index,
-            open=df_view["Open"], high=df_view["High"],
-            low=df_view["Low"], close=df_view["Close"],
-            name="OHLC",
-            increasing_line_color=_COLOR_UP, increasing_fillcolor=_COLOR_UP,
-            decreasing_line_color=_COLOR_DOWN, decreasing_fillcolor=_COLOR_DOWN,
-            showlegend=False,
-        ),
-        row=1, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=df_view.index, y=ma5_view, name="MA5",
-            line=dict(color=_COLOR_MA, width=1.8),
-            hovertemplate=f"MA5: {spec['price_hover_fmt']}<extra></extra>",
-        ),
-        row=1, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=df_view.index, y=atr9_view, name="ATR9",
-            line=dict(color=_COLOR_ATR, width=1.5),
-            fill="tozeroy", fillcolor=_COLOR_ATR_FILL,
-            hovertemplate=f"ATR9: {spec['price_hover_fmt']}<extra></extra>",
-            showlegend=False,
-        ),
-        row=2, col=1,
+    st.markdown(
+        f"<div style='font-size:1.05rem; color:{COLOR_TEXT}; "
+        f"margin:4px 0 6px 4px; font-weight:600;'>"
+        f"{ticker} · {spec['price_chart_fmt'](last_close)} "
+        f"<span style='color:{COLOR_MUTED}; font-weight:400; font-size:0.92rem;'>"
+        f"({last_date})</span></div>",
+        unsafe_allow_html=True,
     )
 
-    rangebreaks = [dict(bounds=["sat", "mon"])]
-    fig.update_layout(
-        title=dict(text=title, x=0.01, xanchor="left", font=dict(size=15, color=COLOR_TEXT)),
+    candle_df = pd.DataFrame({
+        "time": df_view.index,
+        "open": df_view["Open"].values,
+        "high": df_view["High"].values,
+        "low": df_view["Low"].values,
+        "close": df_view["Close"].values,
+    }).dropna()
+
+    candle = CandlestickSeries(
+        data=candle_df,
+        column_mapping={
+            "time": "time", "open": "open", "high": "high",
+            "low": "low", "close": "close",
+        },
+        pane_id=0,
+    )
+    candle.up_color = _COLOR_UP
+    candle.down_color = _COLOR_DOWN
+    candle.border_up_color = _COLOR_UP
+    candle.border_down_color = _COLOR_DOWN
+    candle.wick_up_color = _COLOR_UP
+    candle.wick_down_color = _COLOR_DOWN
+
+    def _line(series: pd.Series, color: str, pane: int, width: int = 2) -> LineSeries:
+        s = series.reindex(df_view.index)
+        line_df = pd.DataFrame({"time": s.index, "value": s.values}).dropna(subset=["value"])
+        ls = LineSeries(
+            data=line_df,
+            column_mapping={"time": "time", "value": "value"},
+            pane_id=pane,
+        )
+        ls.line_options = LineOptions(color=color, line_width=width, line_visible=True)
+        return ls
+
+    series = [
+        candle,
+        _line(ma5, _COLOR_MA5, pane=0),
+        _line(ma20, _COLOR_MA20, pane=0),
+        _line(ma60, _COLOR_MA60, pane=0),
+        _line(atr9, _COLOR_ATR, pane=1, width=2),
+    ]
+
+    chart_opts = ChartOptions(
         height=620,
-        margin=dict(l=10, r=10, t=50, b=10),
-        paper_bgcolor=COLOR_CARD,
-        plot_bgcolor=COLOR_CARD,
-        font=dict(color=COLOR_TEXT),
-        xaxis=dict(rangeslider=dict(visible=False), rangebreaks=rangebreaks),
-        xaxis2=dict(rangebreaks=rangebreaks),
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-            bgcolor="rgba(0,0,0,0)", font=dict(color=COLOR_MUTED, size=11),
+        layout=LayoutOptions(
+            text_color=COLOR_TEXT,
+            font_family=(
+                "Pretendard, -apple-system, BlinkMacSystemFont, "
+                "'Segoe UI', Roboto, sans-serif"
+            ),
+            # 가격(0) : ATR(1) ≈ 3 : 1
+            pane_heights={
+                0: PaneHeightOptions(factor=3.0),
+                1: PaneHeightOptions(factor=1.0),
+            },
         ),
-        hovermode="x unified",
     )
-    fig.update_xaxes(
-        showgrid=True, gridcolor=COLOR_BORDER, zeroline=False,
-        tickfont=dict(color=COLOR_MUTED), linecolor=COLOR_BORDER,
-    )
-    fig.update_yaxes(
-        showgrid=True, gridcolor=COLOR_BORDER, zeroline=False,
-        linecolor=COLOR_BORDER,
-    )
-    fig.update_yaxes(
-        title_text=f"Price ({spec['currency']})", row=1, col=1,
-        tickfont=dict(color=COLOR_MUTED),
-    )
-    fig.update_yaxes(title_text="ATR", row=2, col=1, tickfont=dict(color=COLOR_MUTED))
 
-    st.plotly_chart(fig, width="stretch", theme=None)
+    chart = Chart(series=series, options=chart_opts)
+    # 티커 전환 시 key 가 달라야 LWC 가 새 차트로 재마운트
+    chart.render(key=f"lwc_chart_{spec['code']}_{ticker}")
+
     _render_chart_metrics(spec, df, atr9)
 
 
