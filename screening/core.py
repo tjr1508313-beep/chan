@@ -505,6 +505,7 @@ _RANK_DF_COLUMNS = [
     "return_n",
     "index_return_n",
     "last_price",
+    "below_ma5",
 ]
 
 
@@ -554,6 +555,14 @@ def screen_rank_rs(
         rs = stock_return / idx_return
 
         last_price = _last_close(prices)
+        # 5일선 이탈 여부: 마지막 종가 < 5일 SMA. 데이터 부족이면 False.
+        close_series = prices["Close"].dropna()
+        if len(close_series) >= 5:
+            ma5_last = float(close_series.rolling(5).mean().iloc[-1])
+            below_ma5 = bool(last_price < ma5_last) if pd.notna(ma5_last) else False
+        else:
+            below_ma5 = False
+
         rows.append(
             {
                 "ticker": t,
@@ -561,6 +570,7 @@ def screen_rank_rs(
                 "return_n": float(stock_return),
                 "index_return_n": float(idx_return),
                 "last_price": last_price,
+                "below_ma5": below_ma5,
             }
         )
 

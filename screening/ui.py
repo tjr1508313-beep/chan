@@ -19,6 +19,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 from lightweight_charts_pro.charts.options.line_options import LineOptions
+from lightweight_charts_pro.charts.options.price_format_options import PriceFormatOptions
 from streamlit_lightweight_charts_pro import (
     CandlestickSeries,
     Chart,
@@ -208,6 +209,9 @@ _US_SPEC: dict[str, Any] = {
     "price_chart_fmt": lambda v: f"${v:,.2f}",
     "price_hover_fmt": "$%{y:,.2f}",
     "atr_fmt": lambda v: f"${v:,.2f}",
+    # LWC 차트 가격 포맷 (우측 가격축, 캔들/선 라벨)
+    "chart_price_precision": 2,
+    "chart_price_min_move": 0.01,
 
     # 거래대금
     "dv_label": "거래대금(M$)",
@@ -270,6 +274,9 @@ _KR_SPEC: dict[str, Any] = {
     "price_chart_fmt": lambda v: f"₩{v:,.0f}",
     "price_hover_fmt": "₩%{y:,.0f}",
     "atr_fmt": lambda v: f"₩{v:,.0f}",
+    # LWC 차트 가격 포맷 — 한국 주식은 정수 (소수점 표기 안 함)
+    "chart_price_precision": 0,
+    "chart_price_min_move": 1.0,
 
     # 거래대금
     "dv_label": "거래대금(억)",
@@ -749,64 +756,111 @@ def _render_filter_summary(spec: dict, cfg: dict) -> None:
 
 # ─── 랭킹 테이블 ─────────────────────────────────────────────────────
 
+def _make_pick_callback(spec: dict, ticker: str):
+    """행 셀 버튼 on_click 핸들러 — selected_ticker 를 즉시 세팅."""
+    target_key = _key(spec, "selected_ticker")
+
+    def _cb() -> None:
+        st.session_state[target_key] = ticker
+
+    return _cb
+
+
+def _fmt_cell(value, fmt: str, na: str = "—") -> str:
+    """안전 포맷 — NaN/None 이면 na 반환."""
+    if value is None:
+        return na
+    try:
+        if pd.isna(value):
+            return na
+    except (TypeError, ValueError):
+        pass
+    try:
+        return fmt % value
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _render_ranking_table(
     spec: dict, ranked: pd.DataFrame, rs_period: int
 ) -> str | None:
-    """랭킹 테이블 + 선택된 티커 반환(없으면 None)."""
+    """랭킹 테이블 — 각 셀이 투명 버튼이라 **행 어디든 클릭하면 차트가 열린다**.
+
+    Streamlit st.dataframe 은 selection_mode 시에도 체크박스 클릭만 행 선택을
+    트리거해 사용성이 떨어진다. 컬럼 너비/이탈 배지/행 클릭을 모두 만족시키기 위해
+    `st.columns + st.button` 로 직접 렌더한다. 버튼 스타일은 theme.py 의 CSS 가
+    셀처럼 보이도록 투명화한다.
+
+    반환값은 호환을 위해 selected_ticker 를 그대로 반환 (외부에서 사용 안 해도 무방).
+    """
     if ranked.empty:
         return None
 
-    # 수익률은 소수(1.05 = 105%) → % 단위로 100배 변환
-    display = pd.DataFrame({
-        "순위": ranked["rank"],
-        spec["ticker_col_label"]: ranked["ticker"],
-        "종목명": ranked.apply(
-            lambda r: r.get("name_kr") or r.get("name_en") or r["ticker"], axis=1,
-        ),
-        "현재가": ranked["last_price"],
-        "RS": ranked["rs"],
-        f"{rs_period}일 수익률": ranked["return_n"] * 100.0,
-    })
-
-    column_config: dict[str, Any] = {
-        "순위": st.column_config.NumberColumn(width="small"),
-        spec["ticker_col_label"]: st.column_config.TextColumn(width="small"),
-        "종목명": st.column_config.TextColumn(width="medium"),
-        "현재가": st.column_config.NumberColumn(format=spec["price_col_format"]),
-        "RS": st.column_config.NumberColumn(format="%.3f"),
-        f"{rs_period}일 수익률": st.column_config.NumberColumn(format="%+.2f%%"),
-    }
-
-    # 시총 컬럼 (한국만)
+    # (헤더 라벨, 컬럼 비율) — 모든 자산군 공통
+    columns: list[tuple[str, float]] = [
+        ("순위", 0.45),
+        (spec["ticker_col_label"], 0.75),
+        ("종목명", 2.2),
+        ("현재가", 1.1),
+        ("RS", 0.7),
+        (f"{rs_period}일 수익률", 1.15),
+    ]
     if spec["show_market_cap_column"] and "market_cap" in ranked.columns:
-        display["시총(억)"] = ranked["market_cap"] / 100_000_000.0
-        column_config["시총(억)"] = st.column_config.NumberColumn(format="%,.0f")
+        columns.append(("시총(억)", 0.95))
+    columns.append((spec["dv_label"], 1.0))
 
-    # 거래대금
-    dv_label = spec["dv_label"]
-    if "avg_traded_value_20d" in ranked.columns:
-        display[dv_label] = ranked["avg_traded_value_20d"] / spec["dv_divisor"]
-    else:
-        display[dv_label] = pd.Series([float("nan")] * len(ranked))
-    column_config[dv_label] = st.column_config.NumberColumn(format=spec["dv_col_format"])
+    widths = [c[1] for c in columns]
+    container_key = f"scr_rank_table_{spec['code']}"
 
-    event = st.dataframe(
-        display,
-        hide_index=True,
-        width="stretch",
-        height=min(600, 45 + 35 * len(display)),
-        on_select="rerun",
-        selection_mode="single-row",
-        key=_key(spec, "selected_row"),
-        column_config=column_config,
-    )
+    with st.container(key=container_key):
+        # 헤더 — 좌측 2·3번째는 left, 나머지는 right
+        header_cols = st.columns(widths, gap="small")
+        for i, (label, _) in enumerate(columns):
+            align = "left" if i in (1, 2) else "right"
+            header_cols[i].markdown(
+                f"<div class='scr-rank-header' style='text-align:{align};'>{label}</div>",
+                unsafe_allow_html=True,
+            )
 
-    selected_rows = event.selection.rows if hasattr(event, "selection") else []
-    if selected_rows:
-        idx = selected_rows[0]
-        if 0 <= idx < len(ranked):
-            return str(ranked.iloc[idx]["ticker"])
-    return None
+        # 데이터 행
+        for row_pos, row in enumerate(ranked.itertuples(index=False)):
+            r = row._asdict()
+            ticker = str(r["ticker"])
+            name_raw = r.get("name_kr") or r.get("name_en") or ticker
+            below_ma5 = bool(r.get("below_ma5", False))
+            # (이탈) 부분만 빨간색 — Streamlit 컬러 마크다운 (`:red[...]`) 사용
+            name_display = f"{name_raw} :red[(이탈)]" if below_ma5 else name_raw
+
+            cells: list[str] = [
+                str(int(r["rank"])),
+                ticker,
+                name_display,
+                spec["price_chart_fmt"](r["last_price"]),
+                _fmt_cell(r.get("rs"), "%.3f"),
+                _fmt_cell(r.get("return_n", 0) * 100.0, "%+.2f%%"),
+            ]
+            if spec["show_market_cap_column"] and "market_cap" in ranked.columns:
+                mc = r.get("market_cap")
+                mc_disp = _fmt_cell(mc / 1e8 if pd.notna(mc) else None, "%,.0f")
+                cells.append(mc_disp)
+            dv = r.get("avg_traded_value_20d")
+            dv_disp = _fmt_cell(
+                dv / spec["dv_divisor"] if pd.notna(dv) else None,
+                spec["dv_col_format"],
+            )
+            cells.append(dv_disp)
+
+            row_cols = st.columns(widths, gap="small")
+            cb = _make_pick_callback(spec, ticker)
+            for c_idx, cell_text in enumerate(cells):
+                row_cols[c_idx].button(
+                    cell_text,
+                    key=f"scr_rank_cell_{spec['code']}_{row_pos}_{c_idx}",
+                    on_click=cb,
+                    use_container_width=True,
+                )
+
+    return st.session_state.get(_key(spec, "selected_ticker"))
 
 
 # ─── 차트 패널 ───────────────────────────────────────────────────────
@@ -854,6 +908,13 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
     candle_df["high"] = ohlc.max(axis=1)
     candle_df["low"] = ohlc.min(axis=1)
 
+    # 가격 포맷: 한국은 정수, 미국은 소수점 2자리
+    price_precision = int(spec.get("chart_price_precision", 2))
+    price_min_move = float(spec.get("chart_price_min_move", 0.01))
+    price_fmt_opts = PriceFormatOptions(
+        type="price", precision=price_precision, min_move=price_min_move,
+    )
+
     candle = CandlestickSeries(
         data=candle_df,
         column_mapping={
@@ -868,8 +929,15 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
     candle.border_down_color = _COLOR_DOWN
     candle.wick_up_color = _COLOR_UP
     candle.wick_down_color = _COLOR_DOWN
+    candle.price_format = price_fmt_opts
 
-    def _line(series: pd.Series, color: str, pane: int, width: int = 2) -> LineSeries:
+    def _line(
+        series: pd.Series,
+        color: str,
+        pane: int,
+        width: int = 2,
+        price_fmt: PriceFormatOptions | None = None,
+    ) -> LineSeries:
         s = series.reindex(df_view.index)
         line_df = pd.DataFrame({"time": s.index, "value": s.values}).dropna(subset=["value"])
         ls = LineSeries(
@@ -878,20 +946,29 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
             pane_id=pane,
         )
         ls.line_options = LineOptions(color=color, line_width=width, line_visible=True)
+        if price_fmt is not None:
+            ls.price_format = price_fmt
         return ls
+
+    # ATR 패널도 통화에 맞춰 포맷 — 한국은 정수, 미국은 소수점 2자리
+    atr_fmt_opts = PriceFormatOptions(
+        type="price", precision=price_precision, min_move=price_min_move,
+    )
 
     series = [
         candle,
-        _line(ma5, _COLOR_MA5, pane=0),
-        _line(ma20, _COLOR_MA20, pane=0),
-        _line(ma60, _COLOR_MA60, pane=0),
-        _line(atr9, _COLOR_ATR, pane=1, width=2),
+        _line(ma5, _COLOR_MA5, pane=0, price_fmt=price_fmt_opts),
+        _line(ma20, _COLOR_MA20, pane=0, price_fmt=price_fmt_opts),
+        _line(ma60, _COLOR_MA60, pane=0, price_fmt=price_fmt_opts),
+        _line(atr9, _COLOR_ATR, pane=1, width=2, price_fmt=atr_fmt_opts),
     ]
 
     chart_opts = ChartOptions(
         height=620,
         layout=LayoutOptions(
             text_color=COLOR_TEXT,
+            # 기본 11 → 13: x/y축 라벨이 너무 작아 보이는 문제 해결
+            font_size=13,
             font_family=(
                 "Pretendard, -apple-system, BlinkMacSystemFont, "
                 "'Segoe UI', Roboto, sans-serif"

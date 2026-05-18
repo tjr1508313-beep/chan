@@ -14,6 +14,7 @@
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 # 상수 — 다른 모듈에서 색상 일관성 유지용으로 import 가능
 COLOR_BG = "#f7f8fa"
@@ -232,10 +233,115 @@ div[data-testid="stDataFrame"] [data-testid="stDataFrameResizable"] {{
 hr {{
     border-color: {COLOR_BORDER};
 }}
+
+/* ───── 커스텀 랭킹 테이블 (행 어디든 클릭 가능) ───── */
+div.st-key-scr_rank_table_us,
+div.st-key-scr_rank_table_kr {{
+    background-color: {COLOR_CARD};
+    border: 1px solid {COLOR_BORDER};
+    border-radius: 10px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    padding: 2px 6px 6px;
+    margin-bottom: 0.5rem;
+}}
+
+/* 헤더 셀 — markdown 으로 그림 */
+.scr-rank-header {{
+    font-weight: 600;
+    color: {COLOR_MUTED};
+    font-size: 0.82rem;
+    padding: 10px 8px 6px;
+    border-bottom: 1px solid {COLOR_BORDER};
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}}
+
+/* 데이터 셀 = 투명 버튼 (행 어디든 클릭하면 차트 열림) */
+div.st-key-scr_rank_table_us .stButton > button,
+div.st-key-scr_rank_table_kr .stButton > button {{
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px solid #f3f4f6 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 6px 8px !important;
+    color: {COLOR_TEXT} !important;
+    font-weight: 400 !important;
+    font-size: 0.92rem !important;
+    min-height: 34px !important;
+    width: 100%;
+    line-height: 1.25;
+    justify-content: flex-end !important;
+}}
+div.st-key-scr_rank_table_us .stButton > button:hover,
+div.st-key-scr_rank_table_kr .stButton > button:hover {{
+    background: #fff5f5 !important;
+    color: {COLOR_ACCENT} !important;
+}}
+div.st-key-scr_rank_table_us .stButton > button:focus,
+div.st-key-scr_rank_table_kr .stButton > button:focus,
+div.st-key-scr_rank_table_us .stButton > button:active,
+div.st-key-scr_rank_table_kr .stButton > button:active {{
+    background: #fff5f5 !important;
+    color: {COLOR_ACCENT} !important;
+    outline: none !important;
+    box-shadow: none !important;
+}}
+/* 텍스트(span) 도 정렬을 따르게 */
+div.st-key-scr_rank_table_us .stButton > button > div,
+div.st-key-scr_rank_table_kr .stButton > button > div,
+div.st-key-scr_rank_table_us .stButton > button p,
+div.st-key-scr_rank_table_kr .stButton > button p {{
+    width: 100%;
+    text-align: inherit !important;
+}}
+
+/* 2·3번째 컬럼(코드/종목명)은 좌측 정렬, 나머지는 우측 정렬(위의 기본값) */
+div.st-key-scr_rank_table_us [data-testid="stHorizontalBlock"] > div:nth-child(2) .stButton > button,
+div.st-key-scr_rank_table_us [data-testid="stHorizontalBlock"] > div:nth-child(3) .stButton > button,
+div.st-key-scr_rank_table_kr [data-testid="stHorizontalBlock"] > div:nth-child(2) .stButton > button,
+div.st-key-scr_rank_table_kr [data-testid="stHorizontalBlock"] > div:nth-child(3) .stButton > button {{
+    justify-content: flex-start !important;
+    text-align: left !important;
+}}
+
+/* 행 단위 hover — 같은 행의 버튼들이 동시에 회색배경 (가능하면) */
+div.st-key-scr_rank_table_us [data-testid="stHorizontalBlock"]:hover .stButton > button,
+div.st-key-scr_rank_table_kr [data-testid="stHorizontalBlock"]:hover .stButton > button {{
+    background: #fff5f5 !important;
+}}
 </style>
 """
 
 
+_NOTRANSLATE_JS = """
+<script>
+(function() {
+    try {
+        var p = window.parent.document;
+        // documentElement (=<html>) 에 translate=no + class notranslate
+        p.documentElement.setAttribute('translate', 'no');
+        p.documentElement.classList.add('notranslate');
+        // <head> 에 google notranslate meta 1회만 주입
+        if (!p.querySelector('meta[name="google"][content="notranslate"]')) {
+            var m = p.createElement('meta');
+            m.name = 'google';
+            m.content = 'notranslate';
+            (p.head || p.documentElement).appendChild(m);
+        }
+    } catch (e) { /* iframe 권한 문제 시 무시 */ }
+})();
+</script>
+"""
+
+
 def apply_theme() -> None:
-    """스크리닝 앱 라이트 테마 CSS를 Streamlit 페이지에 주입."""
+    """스크리닝 앱 라이트 테마 CSS를 Streamlit 페이지에 주입.
+
+    Chrome 자동 번역이 미국 티커/종목명(MRAM→엠람, FLEX→몸을 풀다 등)을
+    멋대로 한국어로 바꾸는 문제 차단 → notranslate meta + translate=no 속성 추가.
+    한국 종목명(한국어→한국어)에는 영향 없음.
+    """
     st.markdown(_CSS, unsafe_allow_html=True)
+    components.html(_NOTRANSLATE_JS, height=0)
