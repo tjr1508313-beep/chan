@@ -96,9 +96,13 @@ def _refresh_one_price(t: str, days: int, force: bool) -> tuple[str, str | None,
             return ("failed", t, False)
 
         if check_splits and _detect_new_split(df, last_before):
-            df = us_data.us_load_prices(t, days, with_actions=False)
-            if df is None or df.empty:
-                return ("failed", t, False)
+            # 분할 감지 — 캐시의 옛 가격은 미조정 상태라 통째 갈아엎는다.
+            # fetch_days < days 면 더 긴 기간을 다시 받아야 하지만,
+            # 이미 days 이상 받았다면 그대로 재사용해 API 호출 1회로 끝낸다.
+            if fetch_days < days:
+                df = us_data.us_load_prices(t, days, with_actions=False)
+                if df is None or df.empty:
+                    return ("failed", t, False)
             cache.cache_delete_prices(t)
             cache.cache_save_prices(t, df)
             return ("updated", None, True)

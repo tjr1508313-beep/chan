@@ -31,6 +31,17 @@ def _sync_remote_cache_once():
     return sync_from_remote(force=False)
 
 
+@st.cache_resource(show_spinner=False)
+def _init_cache_once() -> bool:
+    """앱 프로세스 동안 1회만 SQLite 스키마 초기화.
+
+    `CREATE IF NOT EXISTS` 만 있는 idempotent 작업이라 rerun 마다 호출할
+    필요가 없다.
+    """
+    init_cache()
+    return True
+
+
 def main() -> None:
     st.set_page_config(
         page_title="주식 스크리닝",
@@ -45,7 +56,7 @@ def main() -> None:
     _sync_remote_cache_once()
 
     # 캐시 DB 가 없는 환경(새 체크아웃 등)에서도 읽기 경로가 깨지지 않도록 보장
-    init_cache()
+    _init_cache_once()
 
     # ─── 비밀번호 잠금 (배포 환경에서만 활성, 로컬은 자동 비활성) ───
     require_password()

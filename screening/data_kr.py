@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -64,20 +65,31 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 _LISTING_CACHE: dict[str, pd.DataFrame] = {}
+_LISTING_LOCK = threading.Lock()
 
 
 def _get_listing(market: str) -> pd.DataFrame:
-    """`market` ∈ {'KOSPI', 'KOSDAQ'} 의 StockListing 결과 (Code, Name 등)."""
-    if market in _LISTING_CACHE:
-        return _LISTING_CACHE[market]
+    """`market` ∈ {'KOSPI', 'KOSDAQ'} 의 StockListing 결과 (Code, Name 등).
+
+    ThreadPool 새로고침에서 같은 market 으로 동시 호출될 수 있어
+    `_LISTING_LOCK` 으로 보호한다. double-checked locking 으로 hit 경로의
+    잠금 비용은 최소화.
+    """
+    cached = _LISTING_CACHE.get(market)
+    if cached is not None:
+        return cached
 
     import FinanceDataReader as fdr
 
-    df = fdr.StockListing(market)
-    if "Code" in df.columns:
-        df = df.assign(Code=df["Code"].astype(str).str.zfill(6).str.strip())
-    _LISTING_CACHE[market] = df
-    return df
+    with _LISTING_LOCK:
+        cached = _LISTING_CACHE.get(market)
+        if cached is not None:
+            return cached
+        df = fdr.StockListing(market)
+        if "Code" in df.columns:
+            df = df.assign(Code=df["Code"].astype(str).str.zfill(6).str.strip())
+        _LISTING_CACHE[market] = df
+        return df
 
 
 # ---------------------------------------------------------------------------

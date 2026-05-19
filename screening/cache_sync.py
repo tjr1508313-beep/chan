@@ -536,7 +536,10 @@ def _sync_with_urllib(force: bool) -> SyncResult:
     if fetch_status == "no_remote":
         return SyncResult(status="no_remote", remote_stamp=remote_stamp)
     if fetch_status == "auth_required":
-        return SyncResult(status="auth_required", remote_stamp=remote_stamp, error=fetch_status)
+        return SyncResult(
+            status="auth_required", remote_stamp=remote_stamp,
+            error="토큰 권한 부족 / private 레포 권한 만료.",
+        )
     if fetch_status is not None:
         return SyncResult(status="unreachable", remote_stamp=remote_stamp, error=fetch_status)
 

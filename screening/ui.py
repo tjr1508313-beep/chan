@@ -99,10 +99,15 @@ def ui_load_ranked_df(
     rs_period: int,
     top_n: int,
     filter_config: dict,
-    _tickers_tuple: tuple[str, ...],  # 캐시 키 일부
+    tickers_tuple: tuple[str, ...],
 ) -> tuple[pd.DataFrame, dict]:
-    """필터 + RS 랭킹을 한 번에 돌려 (ranked_df, stats) 반환."""
-    tickers = list(_tickers_tuple)
+    """필터 + RS 랭킹을 한 번에 돌려 (ranked_df, stats) 반환.
+
+    Note:
+        `tickers_tuple` 은 캐시 키에 포함된다. 언더스코어 접두사를 쓰면
+        Streamlit cache_data 가 키에서 제외해 stale 데이터가 남는다.
+    """
+    tickers = list(tickers_tuple)
     if not tickers:
         return pd.DataFrame(), {"total": 0, "final": 0}
 
@@ -592,9 +597,10 @@ def _render_refresh_progress(spec: dict, job: dict) -> None:
 
 def _render_refresh_result(spec: dict, job: dict) -> None:
     """완료/실패한 새로고침 결과 표시."""
-    # 완료 직후 1회만 랭킹 캐시 무효화
+    # 완료 직후 1회만 랭킹/차트 캐시 무효화
     if not job.get("cache_cleared"):
         ui_load_ranked_df.clear()
+        ui_load_chart_df.clear()
         job["cache_cleared"] = True
 
     if job.get("error"):
@@ -1037,7 +1043,7 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
         rs_period=rs_period,
         top_n=top_n,
         filter_config=filter_config,
-        _tickers_tuple=tuple(tickers),
+        tickers_tuple=tuple(tickers),
     )
 
     idx_return = None

@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import hmac
 import os
 
 import streamlit as st
@@ -60,7 +61,7 @@ def require_password() -> None:
             placeholder="비밀번호",
         )
         if pw:
-            if pw == expected:
+            if hmac.compare_digest(pw, expected):
                 st.session_state[_KEY_AUTH] = True
                 st.rerun()
             else:
