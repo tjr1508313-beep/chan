@@ -773,7 +773,12 @@ def _make_pick_callback(spec: dict, ticker: str):
 
 
 def _fmt_cell(value, fmt: str, na: str = "—") -> str:
-    """안전 포맷 — NaN/None 이면 na 반환."""
+    """안전 포맷 — NaN/None 이면 na 반환.
+
+    fmt 은 ``%`` 스타일 (`"%.3f"`, `"%+.2f%%"`, `"%,.0f"`) 또는
+    ``format()`` 스타일 (`",.0f"`) 모두 허용. ``%`` 스타일은 thousands separator(`,`)
+    를 지원하지 않으므로 자동으로 format() 스타일로 변환해 처리한다.
+    """
     if value is None:
         return na
     try:
@@ -781,8 +786,19 @@ def _fmt_cell(value, fmt: str, na: str = "—") -> str:
             return na
     except (TypeError, ValueError):
         pass
+    if fmt.startswith("%"):
+        spec = fmt[1:]
+        # 끝에 리터럴 `%%` 가 붙어있으면 잘라내고 마지막에 다시 부착
+        suffix = ""
+        if spec.endswith("%%"):
+            spec = spec[:-2]
+            suffix = "%"
+        try:
+            return format(value, spec) + suffix
+        except (TypeError, ValueError):
+            pass
     try:
-        return fmt % value
+        return format(value, fmt)
     except (TypeError, ValueError):
         return str(value)
 
@@ -792,23 +808,40 @@ def _render_ranking_table(
 ) -> str | None:
     """랭킹 테이블 — 각 셀이 투명 버튼이라 **행 어디든 클릭하면 차트가 열린다**.
 
-    Streamlit st.dataframe 은 selection_mode 시에도 체크박스 클릭만 행 선택을
-    트리거해 사용성이 떨어진다. 컬럼 너비/이탈 배지/행 클릭을 모두 만족시키기 위해
-    `st.columns + st.button` 로 직접 렌더한다. 버튼 스타일은 theme.py 의 CSS 가
-    셀처럼 보이도록 투명화한다.
-
-    반환값은 호환을 위해 selected_ticker 를 그대로 반환 (외부에서 사용 안 해도 무방).
+    정렬 기준은 테이블 위 st.pills 로 선택. 활성 컬럼 헤더에 ▼ 표시.
     """
     if ranked.empty:
         return None
 
-    # (헤더 라벨, 컬럼 비율) — 모든 자산군 공통
+    # 정렬 기준 pills — 테이블 위에 표시
+    has_weighted = "rs_weighted" in ranked.columns and not ranked["rs_weighted"].isna().all()
+    sort_options = ["RS", "RS가중"] if has_weighted else ["RS"]
+    sort_choice = st.pills(
+        "정렬 기준",
+        sort_options,
+        default="RS",
+        label_visibility="collapsed",
+        key=_key(spec, "sort_pills"),
+    )
+    sort_col = "rs_weighted" if sort_choice == "RS가중" else "rs"
+
+    # 선택된 정렬 기준으로 재정렬 + 순위 재계산
+    ranked = (
+        ranked
+        .sort_values(sort_col, ascending=False, na_position="last", kind="mergesort")
+        .reset_index(drop=True)
+        .copy()
+    )
+    ranked["rank"] = range(1, len(ranked) + 1)
+
+    # (헤더 라벨, 컬럼 비율)
     columns: list[tuple[str, float]] = [
         ("순위", 0.45),
         (spec["ticker_col_label"], 0.75),
         ("종목명", 2.2),
         ("현재가", 1.1),
         ("RS", 0.7),
+        ("RS가중", 0.85),
         (f"{rs_period}일 수익률", 1.15),
     ]
     if spec["show_market_cap_column"] and "market_cap" in ranked.columns:
@@ -819,12 +852,15 @@ def _render_ranking_table(
     container_key = f"scr_rank_table_{spec['code']}"
 
     with st.container(key=container_key):
-        # 헤더 — 좌측 2·3번째는 left, 나머지는 right
+        # 헤더 — 활성 정렬 컬럼 강조
         header_cols = st.columns(widths, gap="small")
         for i, (label, _) in enumerate(columns):
             align = "left" if i in (1, 2) else "right"
+            is_active = (sort_col == "rs" and label == "RS") or (sort_col == "rs_weighted" and label == "RS가중")
+            style = f"text-align:{align}; {'color:#1a1a1a; font-weight:700;' if is_active else ''}"
+            text = f"{label} ▼" if is_active else label
             header_cols[i].markdown(
-                f"<div class='scr-rank-header' style='text-align:{align};'>{label}</div>",
+                f"<div class='scr-rank-header' style='{style}'>{text}</div>",
                 unsafe_allow_html=True,
             )
 
@@ -834,15 +870,16 @@ def _render_ranking_table(
             ticker = str(r["ticker"])
             name_raw = r.get("name_kr") or r.get("name_en") or ticker
             below_ma5 = bool(r.get("below_ma5", False))
-            # (이탈) 부분만 빨간색 — Streamlit 컬러 마크다운 (`:red[...]`) 사용
             name_display = f"{name_raw} :red[(이탈)]" if below_ma5 else name_raw
 
+            rs_w = r.get("rs_weighted")
             cells: list[str] = [
                 str(int(r["rank"])),
                 ticker,
                 name_display,
                 spec["price_chart_fmt"](r["last_price"]),
                 _fmt_cell(r.get("rs"), "%.3f"),
+                _fmt_cell(rs_w, "%.3f") if pd.notna(rs_w) else "—",
                 _fmt_cell(r.get("return_n", 0) * 100.0, "%+.2f%%"),
             ]
             if spec["show_market_cap_column"] and "market_cap" in ranked.columns:
@@ -861,7 +898,7 @@ def _render_ranking_table(
             for c_idx, cell_text in enumerate(cells):
                 row_cols[c_idx].button(
                     cell_text,
-                    key=f"scr_rank_cell_{spec['code']}_{row_pos}_{c_idx}",
+                    key=f"scr_rank_cell_{spec['code']}_{ticker}_{c_idx}",
                     on_click=cb,
                     use_container_width=True,
                 )

@@ -3,7 +3,7 @@
 Streamlit 없이 `screening/batch*.py` 의 갱신 함수를 호출해
 `screening_cache.db` 를 업데이트한다.
 
-대상: **지수 + 시세만** (메타는 의도적으로 제외 — 사용자 결정).
+대상: **지수 + 시세 + 메타데이터** (메타는 TTL 7일 기반 증분 — 보통 일주일에 한 번만 실제 외부 호출).
 
 사용법:
     python -m scripts.refresh_cache --market us
@@ -40,8 +40,8 @@ _FAILURE_RATE_THRESHOLD = 0.10  # 10%
 
 
 def _refresh_us() -> dict:
-    """미국주식 지수(^IXIC, ^GSPC) + 나스닥·S&P500 시세 갱신."""
-    out: dict = {"market": "us", "indexes": {}, "prices": {}}
+    """미국주식 지수(^IXIC, ^GSPC) + 나스닥·S&P500 시세 + 메타데이터 갱신."""
+    out: dict = {"market": "us", "indexes": {}, "prices": {}, "meta": {}}
 
     for code in ("^IXIC", "^GSPC"):
         out["indexes"][code] = batch.screen_refresh_index(code, days=300, force=False)
@@ -53,12 +53,18 @@ def _refresh_us() -> dict:
     out["prices"]["result"] = batch.screen_refresh_prices(
         tickers, days=300, force=False, max_workers=4
     )
+
+    # 메타데이터 — TTL 7일 증분 (대다수는 skip, 신규/만료 종목만 yfinance .info 호출)
+    out["meta"]["target_count"] = len(tickers)
+    out["meta"]["result"] = batch.screen_refresh_meta(
+        tickers, ttl_days=7, force=False, max_workers=4
+    )
     return out
 
 
 def _refresh_kr() -> dict:
-    """한국주식 지수(KS11, KQ11) + 코스피·코스닥 시세 갱신."""
-    out: dict = {"market": "kr", "indexes": {}, "prices": {}}
+    """한국주식 지수(KS11, KQ11) + 코스피·코스닥 시세 + 메타데이터 갱신."""
+    out: dict = {"market": "kr", "indexes": {}, "prices": {}, "meta": {}}
 
     for code in ("KS11", "KQ11"):
         out["indexes"][code] = batch_kr.screen_refresh_index_kr(
@@ -71,6 +77,12 @@ def _refresh_kr() -> dict:
     out["prices"]["target_count"] = len(tickers)
     out["prices"]["result"] = batch_kr.screen_refresh_prices_kr(
         tickers, days=300, force=False, max_workers=8
+    )
+
+    # 메타데이터 — FDR StockListing 한 번 호출로 전체 처리, TTL 7일 증분
+    out["meta"]["target_count"] = len(tickers)
+    out["meta"]["result"] = batch_kr.screen_refresh_meta_kr(
+        tickers, ttl_days=7, force=False
     )
     return out
 
@@ -103,13 +115,22 @@ def _summarize(report: dict, elapsed_s: float) -> tuple[str, bool]:
         parts.append(f"분할재요청 {fr}")
     if idx_fails:
         parts.append(f"지수실패={','.join(idx_fails)}")
+
+    meta = report.get("meta", {})
+    meta_result = meta.get("result", {}) if isinstance(meta, dict) else {}
+    if meta_result:
+        m_up = int(meta_result.get("updated", 0))
+        m_skip = int(meta_result.get("skipped", 0))
+        m_fail = len(meta_result.get("failed", []) or [])
+        parts.append(f"메타 {m_up}↑ {m_skip}= {m_fail}✗")
+
     parts.append(f"{elapsed_s:.0f}초")
     return " ".join(parts), threshold_exceeded
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="screening_cache.db 헤드리스 갱신 (지수+시세, 메타 제외)"
+        description="screening_cache.db 헤드리스 갱신 (지수+시세+메타, TTL 7일 증분)"
     )
     parser.add_argument("--market", choices=("us", "kr"), required=True)
     parser.add_argument(

@@ -48,6 +48,16 @@ from .china_filter import is_china_ticker
 # 지수 수익률이 0 에 매우 가까우면 RS 극단값 방지를 위해 NaN 처리.
 _RS_EPSILON: float = 1e-9
 
+# Minervini 가중 RS 기간·가중치 (63/126/189/252 영업일)
+_WEIGHTED_PERIODS: list[tuple[int, float]] = [
+    (63, 0.4),
+    (126, 0.2),
+    (189, 0.2),
+    (252, 0.2),
+]
+# 가중 RS 계산에 필요한 최소 데이터 행 수 (252 + 1)
+_WEIGHTED_MIN_ROWS: int = 253
+
 
 # ---------------------------------------------------------------------------
 # 집계 — 캐시에서 필터링용 wide DataFrame 생성
@@ -367,6 +377,34 @@ def screen_apply_filters(
 # RS 계산 — Phase 1.5 에서 구현
 # ---------------------------------------------------------------------------
 
+def _calc_weighted_rs(close: pd.Series) -> float:
+    """Minervini 가중 RS.
+
+    RS = (C/C63)×0.4 + (C/C126)×0.2 + (C/C189)×0.2 + (C/C252)×0.2
+
+    지수 대비 비율이 아닌 **절대 가격 비율** 합산 — 지수 수익률이 필요 없으므로
+    단독으로 종목 중장기 모멘텀을 나타낸다.
+    252영업일(+1) 미만 종목은 NaN 처리.
+    """
+    s = close.dropna()
+    if len(s) < _WEIGHTED_MIN_ROWS:
+        return float("nan")
+    last = float(s.iloc[-1])
+    if last == 0 or pd.isna(last):
+        return float("nan")
+    total = 0.0
+    for period, weight in _WEIGHTED_PERIODS:
+        idx = -(period + 1)
+        try:
+            base = float(s.iloc[idx])
+        except IndexError:
+            return float("nan")
+        if base == 0 or pd.isna(base):
+            return float("nan")
+        total += (last / base) * weight
+    return total
+
+
 def _period_return(series: pd.Series, period: int) -> float:
     """N영업일 수익률: `close[-1] / close[-period-1] - 1`. 데이터 부족 시 NaN."""
     s = series.dropna()
@@ -502,6 +540,7 @@ _RANK_DF_COLUMNS = [
     "rank",
     "ticker",
     "rs",
+    "rs_weighted",
     "return_n",
     "index_return_n",
     "last_price",
@@ -528,8 +567,8 @@ def screen_rank_rs(
         데이터 부족 종목은 NaN 제거. 지수 수익률이 epsilon 근처이면
         모든 RS 가 NaN → 빈 DataFrame.
     """
-    # 여유 +10 영업일 (주말/공휴일 흡수)
-    days = period + 10
+    # 여유 +10 영업일 (주말/공휴일 흡수). 가중 RS 는 252+1일이 필요하므로 그 이상 확보.
+    days = max(period + 10, _WEIGHTED_MIN_ROWS + 10)
 
     index_df = cache_load_index(index_code, days=days)
     idx_return = _index_return(index_df, period)
@@ -563,10 +602,13 @@ def screen_rank_rs(
         else:
             below_ma5 = False
 
+        rs_weighted = _calc_weighted_rs(prices["Close"])
+
         rows.append(
             {
                 "ticker": t,
                 "rs": float(rs),
+                "rs_weighted": rs_weighted,
                 "return_n": float(stock_return),
                 "index_return_n": float(idx_return),
                 "last_price": last_price,

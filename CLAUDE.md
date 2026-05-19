@@ -49,7 +49,7 @@
   - KR: 평일 KST **15:40 / 16:10 / 16:40** (primary + 백업 2 — cron 누락 대비)
   - US: 평일 KST **07:00 / 07:30 / 08:00** (primary + 백업 2)
   - `precheck` job 이 같은 날 이미 성공했으면 후속 백업 슬롯에서 자동 스킵
-- 갱신 범위 = **지수 + 시세만** (메타데이터 제외, TTL 7일이라 수동)
+- 갱신 범위 = **지수 + 시세 + 메타데이터** (메타는 TTL 7일 증분 — 보통은 skip, 만료/신규만 외부 호출)
 - DB 파일은 GitHub 100MB 제한 회피 위해 **`screening_cache.db.gz` (gzip -9)** 로 push
   (2026-05-18 — 미국 130MB → 약 41MB). cache_sync 는 `.gz` 우선, legacy `.db` 폴백.
 - 로컬 앱 시작 시 `screening/cache_sync.py` 가 `last_updated.txt` 확인 후
