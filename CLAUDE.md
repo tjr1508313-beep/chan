@@ -44,10 +44,11 @@
 ### Phase 3 — 매매일지와 통합 (사용자 담당)
 - 하나의 Streamlit 앱에서 탭 분리: [매매일지] [스크리닝]
 
-### 자동 갱신 (2026-05-15)
+### 자동 갱신 (2026-05-15, cron 다중화 2026-05-19)
 - **GitHub Actions** 가 평일 캐시 DB 자동 갱신, `data-cache` 브랜치에 orphan force-push
-  - KR: 평일 KST 15:40 (cron `40 6 * * 1-5`)
-  - US: 평일 KST 07:00 (cron `0 22 * * 0-4`)
+  - KR: 평일 KST **15:40 / 16:10 / 16:40** (primary + 백업 2 — cron 누락 대비)
+  - US: 평일 KST **07:00 / 07:30 / 08:00** (primary + 백업 2)
+  - `precheck` job 이 같은 날 이미 성공했으면 후속 백업 슬롯에서 자동 스킵
 - 갱신 범위 = **지수 + 시세만** (메타데이터 제외, TTL 7일이라 수동)
 - DB 파일은 GitHub 100MB 제한 회피 위해 **`screening_cache.db.gz` (gzip -9)** 로 push
   (2026-05-18 — 미국 130MB → 약 41MB). cache_sync 는 `.gz` 우선, legacy `.db` 폴백.

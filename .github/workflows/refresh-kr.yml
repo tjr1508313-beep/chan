@@ -1,14 +1,17 @@
 name: Refresh KR cache
 
 # 한국주식 시세 자동 갱신
-# 트리거: 월~금 KST 15:40 (= UTC 06:40)
-#   한국 정규장 종료(KST 15:30)는 KST 15:30, 10분 여유 두고 받음.
+# 트리거: 월~금 KST 15:40 / 16:10 / 16:40 (= UTC 06:40 / 07:10 / 07:40)
+#   한국 정규장 종료(KST 15:30) 후 10분 여유. GitHub Actions cron 지연/누락 대비
+#   백업 슬롯 2개 추가. 첫 실행이 성공하면 precheck 가 스킵 처리.
 # 동작: scripts/refresh_cache.py --market kr 실행 후
 #   screening_cache.db 를 data-cache 브랜치에 orphan force-push.
 
 on:
   schedule:
-    - cron: '40 6 * * 1-5'    # UTC 06:40 (월~금 KST 15:40)
+    - cron: '40 6 * * 1-5'    # UTC 06:40 (월~금 KST 15:40) - primary
+    - cron: '10 7 * * 1-5'    # UTC 07:10 (월~금 KST 16:10) - backup
+    - cron: '40 7 * * 1-5'    # UTC 07:40 (월~금 KST 16:40) - backup
   workflow_dispatch:
 
 # 같은 시장끼리는 직렬화. US와는 시간이 안 겹쳐 별도 그룹.
@@ -17,7 +20,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # cron 트리거가 같은 날 이미 성공했으면 후속 백업 슬롯에서 스킵.
+  # workflow_dispatch (수동) 는 항상 실행.
+  precheck:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Check freshness
+        id: check
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Manual run — proceeding."
+            exit 0
+          fi
+          KST_TODAY=$(TZ='Asia/Seoul' date +"%Y-%m-%d")
+          BASE="https://raw.githubusercontent.com/${{ github.repository }}/data-cache"
+          SKIP=false
+          if LU=$(curl -fsSL "$BASE/last_updated.txt" 2>/dev/null); then
+            if echo "$LU" | grep -q "^market=kr$" && echo "$LU" | grep -q "^kst=$KST_TODAY"; then
+              SKIP=true
+              echo "✅ KR already refreshed today ($KST_TODAY) — will skip."
+            fi
+          fi
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+
   refresh:
+    needs: precheck
+    if: needs.precheck.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
