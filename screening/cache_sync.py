@@ -50,7 +50,6 @@ SyncStatus = Literal[
     "no_remote",     # 원격에 캐시 없음 (첫 실행 / data-cache 브랜치 미생성)
     "unreachable",   # 네트워크/HTTP 실패
     "disabled",      # 환경변수로 비활성화
-    "auth_required", # private 레포인데 토큰 미설정 / 권한 부족
     "error",         # 예외
 ]
 
@@ -120,8 +119,6 @@ def _fetch_db_via_requests(tmp: Path, headers: dict, requests_mod) -> tuple[int,
     # 1) .db.gz 시도 (정상 경로)
     try:
         with requests_mod.get(_db_gz_url(), timeout=_DB_TIMEOUT, stream=True, headers=headers) as resp:
-            if resp.status_code in (401, 403):
-                return (0, "auth_required")
             if resp.ok:
                 n = 0
                 with open(tmp_gz, "wb") as f:
@@ -148,8 +145,6 @@ def _fetch_db_via_requests(tmp: Path, headers: dict, requests_mod) -> tuple[int,
     with requests_mod.get(_db_url(), timeout=_DB_TIMEOUT, stream=True, headers=headers) as resp:
         if resp.status_code == 404:
             return (0, "no_remote")
-        if resp.status_code in (401, 403):
-            return (0, "auth_required")
         if not resp.ok:
             return (0, f"HTTP {resp.status_code}")
         n = 0
@@ -189,8 +184,6 @@ def _fetch_db_via_urllib(tmp: Path, headers: dict) -> tuple[int, str | None]:
             return (0, f"decompress: {e}")
         return (n, None)
     except HTTPError as e:
-        if e.code in (401, 403):
-            return (0, "auth_required")
         if e.code != 404:
             return (0, f"HTTP {e.code}")
         # 404 → legacy 폴백으로 진행
@@ -212,48 +205,13 @@ def _fetch_db_via_urllib(tmp: Path, headers: dict) -> tuple[int, str | None]:
     except HTTPError as e:
         if e.code == 404:
             return (0, "no_remote")
-        if e.code in (401, 403):
-            return (0, "auth_required")
         return (0, f"HTTP {e.code}")
     except URLError as e:
         return (0, str(e))
 
 
-def _get_auth_token() -> str:
-    """PAT 토큰을 환경변수 또는 streamlit secrets 에서 읽음.
-
-    우선순위:
-        1. 환경변수 `SCREENING_CACHE_TOKEN`
-        2. `.streamlit/secrets.toml` 의 `github_cache_token`
-
-    private 레포일 때만 필요. public 레포면 빈 문자열 반환해도 raw URL 작동.
-    """
-    tok = os.environ.get("SCREENING_CACHE_TOKEN", "").strip()
-    if tok:
-        return tok
-    try:
-        import streamlit as st  # 옵셔널 — CLI 에서는 미import
-        try:
-            tok = str(st.secrets.get("github_cache_token", "") or "")
-        except (FileNotFoundError, AttributeError, KeyError):
-            tok = ""
-    except ImportError:
-        tok = ""
-    return tok.strip()
-
-
-def _auth_headers() -> dict[str, str]:
-    """raw.githubusercontent.com 호출에 붙일 Authorization 헤더."""
-    headers = {"User-Agent": "screening-app"}
-    tok = _get_auth_token()
-    if tok:
-        headers["Authorization"] = f"Bearer {tok}"
-    return headers
-
-
-def has_auth_token() -> bool:
-    """UI 가 사이드바에서 '토큰 미설정' 경고를 띄울지 결정."""
-    return bool(_get_auth_token())
+def _request_headers() -> dict[str, str]:
+    return {"User-Agent": "screening-app"}
 
 
 def _apply_remote(tmp_remote: Path) -> tuple[str, int]:
@@ -407,8 +365,7 @@ def sync_from_remote(force: bool = False) -> SyncResult:
         except Exception as e:
             return SyncResult(status="error", error=f"urllib fallback: {e}")
 
-    headers = _auth_headers()
-    has_token = "Authorization" in headers
+    headers = _request_headers()
 
     # 1) 원격 stamp 받기
     try:
@@ -416,19 +373,8 @@ def sync_from_remote(force: bool = False) -> SyncResult:
     except Exception as e:
         return SyncResult(status="unreachable", error=str(e))
 
-    # private 레포에 토큰 없으면 404 떨어짐 — 사용자에게 명확히 안내
     if r.status_code == 404:
-        if not has_token:
-            return SyncResult(
-                status="auth_required",
-                error="private 레포라면 PAT 토큰이 필요합니다. docs/auto-refresh-setup.md 참고.",
-            )
         return SyncResult(status="no_remote")
-    if r.status_code in (401, 403):
-        return SyncResult(
-            status="auth_required",
-            error=f"HTTP {r.status_code} — 토큰 권한 부족 / 만료. PAT 재발급 필요.",
-        )
     if not r.ok:
         return SyncResult(status="unreachable", error=f"HTTP {r.status_code}")
 
@@ -460,11 +406,6 @@ def sync_from_remote(force: bool = False) -> SyncResult:
 
     if fetch_status == "no_remote":
         return SyncResult(status="no_remote", remote_stamp=remote_stamp)
-    if fetch_status == "auth_required":
-        return SyncResult(
-            status="auth_required", remote_stamp=remote_stamp,
-            error="토큰 권한 부족 / private 레포 권한 만료.",
-        )
     if fetch_status is not None:
         return SyncResult(status="unreachable", remote_stamp=remote_stamp, error=fetch_status)
 
@@ -490,8 +431,7 @@ def _sync_with_urllib(force: bool) -> SyncResult:
     from urllib.request import Request, urlopen
     from urllib.error import HTTPError, URLError
 
-    headers = _auth_headers()
-    has_token = "Authorization" in headers
+    headers = _request_headers()
 
     try:
         req = Request(_stamp_url(), headers=headers)
@@ -499,14 +439,7 @@ def _sync_with_urllib(force: bool) -> SyncResult:
             text = resp.read().decode("utf-8", errors="replace")
     except HTTPError as e:
         if e.code == 404:
-            if not has_token:
-                return SyncResult(
-                    status="auth_required",
-                    error="private 레포라면 PAT 필요. docs/auto-refresh-setup.md 참고.",
-                )
             return SyncResult(status="no_remote")
-        if e.code in (401, 403):
-            return SyncResult(status="auth_required", error=f"HTTP {e.code}")
         return SyncResult(status="unreachable", error=f"HTTP {e.code}")
     except URLError as e:
         return SyncResult(status="unreachable", error=str(e))
@@ -535,11 +468,6 @@ def _sync_with_urllib(force: bool) -> SyncResult:
 
     if fetch_status == "no_remote":
         return SyncResult(status="no_remote", remote_stamp=remote_stamp)
-    if fetch_status == "auth_required":
-        return SyncResult(
-            status="auth_required", remote_stamp=remote_stamp,
-            error="토큰 권한 부족 / private 레포 권한 만료.",
-        )
     if fetch_status is not None:
         return SyncResult(status="unreachable", remote_stamp=remote_stamp, error=fetch_status)
 
