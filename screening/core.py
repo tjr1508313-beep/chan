@@ -335,7 +335,8 @@ def screen_apply_filters(
     # 3) 시가총액 (min_market_cap > 0 일 때만 적용)
     min_mc = float(cfg.get("min_market_cap", 0.0))
     if min_mc > 0 and "market_cap" in current.columns:
-        mask_mc = current["market_cap"].fillna(-1.0) >= min_mc
+        # NaN(메타 없음) = 모름 → 통과, 값이 있을 때만 필터 적용
+        mask_mc = current["market_cap"].isna() | (current["market_cap"] >= min_mc)
         current = current[mask_mc]
     stats["after_market_cap"] = int(len(current))
 

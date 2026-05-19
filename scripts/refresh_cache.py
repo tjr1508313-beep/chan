@@ -72,6 +72,8 @@ def _refresh_kr() -> dict:
     out["prices"]["result"] = batch_kr.screen_refresh_prices_kr(
         tickers, days=300, force=False, max_workers=8
     )
+    # 메타(market_cap 등) — FDR StockListing 한 번 호출로 전종목 처리, 빠름
+    out["meta"] = batch_kr.screen_refresh_meta_kr(tickers, ttl_days=7, force=False)
     return out
 
 
