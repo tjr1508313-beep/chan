@@ -773,7 +773,13 @@ def _make_pick_callback(spec: dict, ticker: str):
 
 
 def _fmt_cell(value, fmt: str, na: str = "—") -> str:
-    """안전 포맷 — NaN/None 이면 na 반환."""
+    """안전 포맷 — NaN/None 이면 na 반환.
+
+    fmt 은 ``%`` 스타일(`"%.3f"`, `"%+.2f%%"`, `"%,.0f"`) 또는 ``format()`` 스타일
+    (`",.0f"`) 모두 허용. Python 의 ``%`` 연산자는 thousands separator(`,`)를
+    지원하지 않으므로 자동으로 ``format()`` 스타일로 변환해 처리한다.
+    (수정 전: `"%,.0f" % 845.47` → ValueError → str() 폴백 → "845.4737865")
+    """
     if value is None:
         return na
     try:
@@ -781,8 +787,18 @@ def _fmt_cell(value, fmt: str, na: str = "—") -> str:
             return na
     except (TypeError, ValueError):
         pass
+    if fmt.startswith("%"):
+        spec = fmt[1:]
+        suffix = ""
+        if spec.endswith("%%"):
+            spec = spec[:-2]
+            suffix = "%"
+        try:
+            return format(value, spec) + suffix
+        except (TypeError, ValueError):
+            pass
     try:
-        return fmt % value
+        return format(value, fmt)
     except (TypeError, ValueError):
         return str(value)
 

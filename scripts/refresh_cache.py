@@ -40,7 +40,7 @@ _FAILURE_RATE_THRESHOLD = 0.10  # 10%
 
 
 def _refresh_us() -> dict:
-    """미국주식 지수(^IXIC, ^GSPC) + 나스닥·S&P500 시세 갱신."""
+    """미국주식 지수(^IXIC, ^GSPC) + 나스닥·S&P500 시세 + 메타데이터 갱신."""
     out: dict = {"market": "us", "indexes": {}, "prices": {}}
 
     for code in ("^IXIC", "^GSPC"):
@@ -52,6 +52,10 @@ def _refresh_us() -> dict:
     out["prices"]["target_count"] = len(tickers)
     out["prices"]["result"] = batch.screen_refresh_prices(
         tickers, days=300, force=False, max_workers=4
+    )
+    # 메타(시총·한글명 등) — TTL 7일 증분. 평소엔 대부분 skip, 만료/신규만 yfinance .info 호출.
+    out["meta"] = batch.screen_refresh_meta(
+        tickers, ttl_days=7, force=False, max_workers=4
     )
     return out
 
