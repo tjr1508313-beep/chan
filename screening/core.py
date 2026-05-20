@@ -39,8 +39,8 @@ from .cache import (
     cache_get_all_last_price_dates,
     cache_get_last_index_date,
     cache_load_index,
-    cache_load_meta,
-    cache_load_prices,
+    cache_load_meta_bulk,
+    cache_load_prices_bulk,
 )
 from .china_filter import is_china_ticker
 
@@ -205,19 +205,24 @@ def screen_build_screening_df(
     rows: list[dict] = []
     seen: set[str] = set()
 
-    for raw in tickers:
-        if not raw:
-            continue
-        t = str(raw).strip().upper()
-        if not t or t in seen:
+    # 종목별 개별 쿼리(2회×수천종목) 대신 일괄 조회 — 커넥션/왕복 오버헤드 제거.
+    # 변동폭 계산은 prev_close 용 1일 여유가 필요, 안전 여유 +5
+    norm_tickers = [str(t).strip().upper() for t in tickers if t and str(t).strip()]
+    prices_map = cache_load_prices_bulk(norm_tickers, days=lookback_days + 5)
+    meta_map = cache_load_meta_bulk(norm_tickers)
+    empty_prices = pd.DataFrame(
+        columns=["Open", "High", "Low", "Close", "Volume", "traded_value"]
+    )
+
+    for t in norm_tickers:
+        if t in seen:
             continue
         seen.add(t)
 
-        # 변동폭 계산은 prev_close 용 1일 여유가 필요, 안전 여유 +5
-        prices = cache_load_prices(t, days=lookback_days + 5)
-        meta = cache_load_meta(t) or {}
+        prices = prices_map.get(t, empty_prices)
+        meta = meta_map.get(t) or {}
 
-        if (prices is None or prices.empty) and not meta:
+        if prices.empty and not meta:
             continue
 
         last_price = _last_close(prices)
@@ -575,15 +580,15 @@ def screen_rank_rs(
     rows: list[dict] = []
     seen: set[str] = set()
 
-    for raw in tickers:
-        if not raw:
-            continue
-        t = str(raw).strip().upper()
-        if not t or t in seen:
+    norm_tickers = [str(t).strip().upper() for t in tickers if t and str(t).strip()]
+    prices_map = cache_load_prices_bulk(norm_tickers, days=days)
+
+    for t in norm_tickers:
+        if t in seen:
             continue
         seen.add(t)
 
-        prices = cache_load_prices(t, days=days)
+        prices = prices_map.get(t)
         if prices is None or prices.empty:
             continue
 

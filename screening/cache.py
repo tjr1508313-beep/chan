@@ -24,7 +24,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 import pandas as pd
 
@@ -202,6 +202,28 @@ def cache_save_prices(ticker: str, df: pd.DataFrame) -> None:
         conn.executemany(sql, rows)
 
 
+_PRICE_COLS = ["Open", "High", "Low", "Close", "Volume", "traded_value"]
+
+
+def _repair_ohlc(df: pd.DataFrame) -> pd.DataFrame:
+    """0/결측 OHL 행을 같은 행 Close 로 보정.
+
+    FDR 한국 데이터에서 거래 없는 날 등에 Open/High/Low 가 0(또는 결측)으로
+    들어오는 경우가 있다. 그대로 두면 차트가 0에서 솟는 거대 캔들을 그리고
+    ATR(True Range)이 폭주한다. Close 는 항상 유효하므로 0/결측 OHL 을 Close
+    로 채워 doji(평평한 봉)로 만든다. Close 만 쓰는 RS/거래대금에는 영향 없음.
+    """
+    if df.empty or "Close" not in df.columns:
+        return df
+    close = df["Close"]
+    for col in ("Open", "High", "Low"):
+        if col in df.columns:
+            bad = df[col].isna() | (df[col] <= 0)
+            if bad.any():
+                df.loc[bad, col] = close[bad]
+    return df
+
+
 def cache_load_prices(ticker: str, days: int | None = None) -> pd.DataFrame:
     """시세 조회.
 
@@ -223,7 +245,7 @@ def cache_load_prices(ticker: str, days: int | None = None) -> pd.DataFrame:
         )
 
     if df.empty:
-        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume", "traded_value"])
+        return pd.DataFrame(columns=_PRICE_COLS)
 
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date").sort_index()
@@ -236,9 +258,81 @@ def cache_load_prices(ticker: str, days: int | None = None) -> pd.DataFrame:
             "volume": "Volume",
         }
     )
+    df = _repair_ohlc(df)
     if days is not None and days > 0:
         df = df.tail(days)
     return df
+
+
+def cache_load_prices_bulk(
+    tickers: Iterable[str], days: int | None = None
+) -> dict[str, pd.DataFrame]:
+    """여러 티커의 시세를 **쿼리 1회**로 일괄 조회.
+
+    종목별 `cache_load_prices` 를 수천 번 호출하면 커넥션 open/close + 쿼리
+    왕복 오버헤드가 누적돼 전 종목 스크리닝이 수십 초~수 분 걸린다. 이 함수는
+    윈도우 함수(ROW_NUMBER)로 종목별 최근 `days` 행을 한 방에 가져와 pandas
+    groupby 로 분리한다 (≈20배 빠름).
+
+    Args:
+        tickers: 대상 티커. 정규화(대문자) 후 이 집합에 속한 것만 반환.
+        days: 종목별 최근 N영업일. None 이면 전체.
+
+    Returns:
+        {ticker(대문자): DataFrame}. 데이터 없는 티커는 키 부재.
+        각 DataFrame 은 `cache_load_prices` 와 동일 형식(OHLC 보정 포함).
+    """
+    tset = {str(t).strip().upper() for t in tickers if t and str(t).strip()}
+    if not tset:
+        return {}
+
+    with _connect() as conn:
+        # 원하는 티커만 임시테이블에 담아 JOIN — 윈도우 함수를 전체 테이블이 아닌
+        # 대상 종목으로만 좁힌다 (IN 절 파라미터 한계도 회피).
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS _wanted (ticker TEXT PRIMARY KEY)")
+        conn.execute("DELETE FROM _wanted")
+        conn.executemany(
+            "INSERT OR IGNORE INTO _wanted (ticker) VALUES (?)",
+            [(t,) for t in tset],
+        )
+        if days is not None and days > 0:
+            sql = (
+                "SELECT ticker, date, open, high, low, close, volume, traded_value FROM ("
+                "  SELECT p.ticker, p.date, p.open, p.high, p.low, p.close, "
+                "         p.volume, p.traded_value, "
+                "         ROW_NUMBER() OVER (PARTITION BY p.ticker ORDER BY p.date DESC) AS rn "
+                "  FROM prices p JOIN _wanted w ON p.ticker = w.ticker"
+                ") WHERE rn <= ? ORDER BY ticker ASC, date ASC"
+            )
+            df = pd.read_sql_query(sql, conn, params=(int(days),))
+        else:
+            df = pd.read_sql_query(
+                "SELECT p.ticker, p.date, p.open, p.high, p.low, p.close, "
+                "p.volume, p.traded_value "
+                "FROM prices p JOIN _wanted w ON p.ticker = w.ticker "
+                "ORDER BY p.ticker ASC, p.date ASC",
+                conn,
+            )
+
+    if df.empty:
+        return {}
+
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.rename(
+        columns={
+            "open": "Open",
+            "high": "High",
+            "low": "Low",
+            "close": "Close",
+            "volume": "Volume",
+        }
+    )
+
+    out: dict[str, pd.DataFrame] = {}
+    for tk, g in df.groupby("ticker", sort=False):
+        g = g.drop(columns=["ticker"]).set_index("date").sort_index()
+        out[str(tk)] = _repair_ohlc(g[_PRICE_COLS])
+    return out
 
 
 def cache_delete_prices(ticker: str) -> int:
@@ -352,6 +446,35 @@ def cache_load_meta(ticker: str) -> dict | None:
         "is_risk": bool(row[7]) if row[7] is not None else None,
         "updated_at": row[8],
     }
+
+
+def cache_load_meta_bulk(tickers: Iterable[str]) -> dict[str, dict]:
+    """여러 티커의 메타를 **쿼리 1회**로 일괄 조회. 형식은 `cache_load_meta` 와 동일."""
+    tset = {str(t).strip().upper() for t in tickers if t and str(t).strip()}
+    if not tset:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ticker, name_en, name_kr, sector, country, exchange, "
+            "market_cap, is_china, is_risk, updated_at FROM metadata"
+        ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        tk = str(r[0])
+        if tk not in tset:
+            continue
+        out[tk] = {
+            "name_en": r[1],
+            "name_kr": r[2],
+            "sector": r[3],
+            "country": r[4],
+            "exchange": r[5],
+            "market_cap": r[6],
+            "is_china": bool(r[7]) if r[7] is not None else None,
+            "is_risk": bool(r[8]) if r[8] is not None else None,
+            "updated_at": r[9],
+        }
+    return out
 
 
 def cache_meta_age_days(ticker: str) -> int | None:

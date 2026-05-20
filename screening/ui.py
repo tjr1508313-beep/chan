@@ -20,6 +20,7 @@ import pandas as pd
 import streamlit as st
 from lightweight_charts_pro.charts.options.line_options import LineOptions
 from lightweight_charts_pro.charts.options.price_format_options import PriceFormatOptions
+from lightweight_charts_pro.charts.options.time_scale_options import TimeScaleOptions
 from streamlit_lightweight_charts_pro import (
     CandlestickSeries,
     Chart,
@@ -932,17 +933,38 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
     df_view = df.tail(lookback_days)
     last_close = float(df_view["Close"].iloc[-1])
     last_date = df_view.index[-1].strftime("%Y-%m-%d")
+
+    # 이평선 색상 범례 (좌상단) — 색칩 + 기간 라벨
+    legend = "".join(
+        f"<span style='display:inline-flex; align-items:center; "
+        f"margin-right:12px;'>"
+        f"<span style='display:inline-block; width:11px; height:11px; "
+        f"border-radius:2px; background:{c}; margin-right:4px;'></span>"
+        f"<span style='color:{COLOR_MUTED}; font-size:0.82rem;'>{lbl}</span>"
+        f"</span>"
+        for c, lbl in (
+            (_COLOR_MA5, "MA5"),
+            (_COLOR_MA20, "MA20"),
+            (_COLOR_MA60, "MA60"),
+        )
+    )
     st.markdown(
         f"<div style='font-size:1.05rem; color:{COLOR_TEXT}; "
-        f"margin:4px 0 6px 4px; font-weight:600;'>"
+        f"margin:4px 0 2px 4px; font-weight:600;'>"
         f"{ticker} · {spec['price_chart_fmt'](last_close)} "
         f"<span style='color:{COLOR_MUTED}; font-weight:400; font-size:0.92rem;'>"
-        f"({last_date})</span></div>",
+        f"({last_date})</span></div>"
+        f"<div style='margin:0 0 6px 4px;'>{legend}</div>",
         unsafe_allow_html=True,
     )
 
+    # LWC 는 time 을 UNIX 초로 변환하며 naive datetime 은 서버 로컬 타임존으로
+    # 해석한다 (로컬 KST vs 클라우드 UTC 에서 날짜가 어긋남). UTC 자정으로 고정해
+    # 어느 환경에서나 동일한 날짜로 표시되게 한다.
+    view_times = df_view.index.tz_localize("UTC")
+
     candle_df = pd.DataFrame({
-        "time": df_view.index,
+        "time": view_times,
         "open": df_view["Open"].values,
         "high": df_view["High"].values,
         "low": df_view["Low"].values,
@@ -985,7 +1007,7 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
         price_fmt: PriceFormatOptions | None = None,
     ) -> LineSeries:
         s = series.reindex(df_view.index)
-        line_df = pd.DataFrame({"time": s.index, "value": s.values}).dropna(subset=["value"])
+        line_df = pd.DataFrame({"time": view_times, "value": s.values}).dropna(subset=["value"])
         ls = LineSeries(
             data=line_df,
             column_mapping={"time": "time", "value": "value"},
@@ -1025,6 +1047,9 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
                 1: PaneHeightOptions(factor=1.0),
             },
         ),
+        # 일봉이라 시각(00:00) 표시 불필요 — 기본 time_visible=True 면 축/크로스헤어에
+        # "00:00" 가 붙어 날짜만 보이지 않는 문제. 날짜만 표시하도록 끈다.
+        time_scale=TimeScaleOptions(time_visible=False, seconds_visible=False),
     )
 
     chart = Chart(series=series, options=chart_opts)
