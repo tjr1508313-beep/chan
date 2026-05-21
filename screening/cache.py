@@ -585,11 +585,17 @@ def cache_load_meta_bulk(tickers: Iterable[str]) -> dict[str, dict]:
     tset = {str(t).strip().upper() for t in tickers if t and str(t).strip()}
     if not tset:
         return {}
+    _SQL = (
+        "SELECT ticker, name_en, name_kr, sector, country, exchange, "
+        "market_cap, is_china, is_risk, caution_flags, updated_at FROM metadata"
+    )
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT ticker, name_en, name_kr, sector, country, exchange, "
-            "market_cap, is_china, is_risk, caution_flags, updated_at FROM metadata"
-        ).fetchall()
+        try:
+            rows = conn.execute(_SQL).fetchall()
+        except sqlite3.OperationalError:
+            # 원격 동기화 DB에 caution_flags 컬럼이 없는 경우 마이그레이션 후 재시도
+            _migrate_caution_flags_column(conn)
+            rows = conn.execute(_SQL).fetchall()
     out: dict[str, dict] = {}
     for r in rows:
         tk = str(r[0])
