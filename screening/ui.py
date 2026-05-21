@@ -20,6 +20,7 @@ import pandas as pd
 import streamlit as st
 from lightweight_charts_pro.charts.options.line_options import LineOptions
 from lightweight_charts_pro.charts.options.price_format_options import PriceFormatOptions
+from lightweight_charts_pro.charts.options.time_scale_options import TimeScaleOptions
 from streamlit_lightweight_charts_pro import (
     CandlestickSeries,
     Chart,
@@ -39,8 +40,11 @@ from .cache import (
     cache_get_all_last_price_dates,
     cache_load_index,
     cache_load_prices,
+    cache_load_universe,
+    cache_prune_orphan_prices,
+    cache_save_universe,
 )
-from .cache_sync import get_last_sync_info, has_auth_token, sync_from_remote
+from .cache_sync import get_last_sync_info, sync_from_remote
 from .core import (
     calc_wilder_atr,
     screen_apply_filters,
@@ -79,9 +83,8 @@ _INDEX_DISPLAY = {
 
 # ─── 데이터 획득 (캐시된 헬퍼) ─────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def ui_load_index_tickers(index_code: str) -> list[str]:
-    """지수 구성종목 티커 리스트. FDR 호출 비용 있어 1시간 캐시."""
+def _fetch_index_tickers_from_source(index_code: str) -> list[str]:
+    """FDR 등 외부 소스에서 지수 구성종목을 직접 조회 (네트워크)."""
     if index_code == "^IXIC":
         return us_get_nasdaq_tickers()
     if index_code == "^GSPC":
@@ -91,6 +94,30 @@ def ui_load_index_tickers(index_code: str) -> list[str]:
     if index_code == "KQ11":
         return kr_get_kosdaq_tickers()
     return []
+
+
+def ui_refresh_index_universe(index_code: str) -> list[str]:
+    """외부 소스에서 최신 구성종목을 받아 DB universe 에 저장하고 반환.
+
+    갱신(새로고침/Actions) 경로 전용 — 항상 네트워크를 타서 최신 목록을 확보한다.
+    """
+    tickers = _fetch_index_tickers_from_source(index_code)
+    if tickers:
+        cache_save_universe(index_code, tickers)
+    return tickers
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def ui_load_index_tickers(index_code: str) -> list[str]:
+    """지수 구성종목 티커 리스트 (화면/스크리닝용).
+
+    DB `universe` 테이블을 먼저 읽어 **외부 호출 없이** 반환한다. 저장된 게
+    없을 때(새 체크아웃 등)만 FDR 로 폴백하고, 받은 목록을 DB 에 저장해둔다.
+    """
+    cached = cache_load_universe(index_code)
+    if cached:
+        return cached
+    return ui_refresh_index_universe(index_code)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -522,6 +549,12 @@ def _refresh_worker(
             f"skipped={meta_result['skipped']}, "
             f"failed={len(meta_result['failed'])}"
         )
+
+        # 현재 유니버스에 없는 죽은 티커 시세 정리 (날짜 트리밍은 안 함)
+        pruned = cache_prune_orphan_prices(vacuum=False)
+        if pruned:
+            job["messages"].append(f"정리: 죽은 티커 시세 {pruned:,}행 삭제")
+
         job["phase"] = "완료"
     except Exception as e:  # 스레드 경계 — 예외를 job 에 담아 UI 로 전달
         job["error"] = str(e)
@@ -538,7 +571,8 @@ def _start_refresh(spec: dict, index_code: str, force: bool) -> None:
     if existing and existing.get("running"):
         return
 
-    tickers = ui_load_index_tickers(index_code)
+    # 새로고침은 최신 구성종목을 외부 소스에서 받아 universe 갱신 (편입/편출 반영)
+    tickers = ui_refresh_index_universe(index_code)
     if not tickers:
         st.session_state[job_key] = {
             "running": False,
@@ -772,12 +806,32 @@ def _make_pick_callback(spec: dict, ticker: str):
     return _cb
 
 
+def _first_valid_name(*candidates: object) -> str:
+    """후보 중 첫 '유효한 종목명 문자열' 반환 (NaN/None/빈문자 건너뜀).
+
+    마지막 후보(보통 ticker)는 항상 문자열이라 폴백으로 안전하다.
+    """
+    for c in candidates:
+        if c is None:
+            continue
+        try:
+            if pd.isna(c):  # float NaN 등
+                continue
+        except (TypeError, ValueError):
+            pass
+        s = str(c).strip()
+        if s:
+            return s
+    return ""
+
+
 def _fmt_cell(value, fmt: str, na: str = "—") -> str:
     """안전 포맷 — NaN/None 이면 na 반환.
 
-    fmt 은 ``%`` 스타일 (`"%.3f"`, `"%+.2f%%"`, `"%,.0f"`) 또는
-    ``format()`` 스타일 (`",.0f"`) 모두 허용. ``%`` 스타일은 thousands separator(`,`)
-    를 지원하지 않으므로 자동으로 format() 스타일로 변환해 처리한다.
+    fmt 은 ``%`` 스타일(`"%.3f"`, `"%+.2f%%"`, `"%,.0f"`) 또는 ``format()`` 스타일
+    (`",.0f"`) 모두 허용. Python 의 ``%`` 연산자는 thousands separator(`,`)를
+    지원하지 않으므로 자동으로 ``format()`` 스타일로 변환해 처리한다.
+    (수정 전: `"%,.0f" % 845.47` → ValueError → str() 폴백 → "845.4737865")
     """
     if value is None:
         return na
@@ -889,7 +943,10 @@ def _render_ranking_table(
         for row_pos, row in enumerate(ranked.itertuples(index=False)):
             r = row._asdict()
             ticker = str(r["ticker"])
-            name_raw = r.get("name_kr") or r.get("name_en") or ticker
+            # 메타 미보유 종목은 name_kr/name_en 이 NaN(float)으로 들어온다.
+            # NaN 은 truthy 라 `a or b or c` 로 거르면 NaN 이 그대로 새어나가
+            # 버튼 라벨(문자열 필수)에서 TypeError 가 난다 → 명시적으로 검사.
+            name_raw = _first_valid_name(r.get("name_kr"), r.get("name_en"), ticker)
             below_ma5 = bool(r.get("below_ma5", False))
             name_display = f"{name_raw} :red[(이탈)]" if below_ma5 else name_raw
             _badge = _caution_badge_md(r.get("caution_flags"))
@@ -953,17 +1010,38 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
     df_view = df.tail(lookback_days)
     last_close = float(df_view["Close"].iloc[-1])
     last_date = df_view.index[-1].strftime("%Y-%m-%d")
+
+    # 이평선 색상 범례 (좌상단) — 색칩 + 기간 라벨
+    legend = "".join(
+        f"<span style='display:inline-flex; align-items:center; "
+        f"margin-right:12px;'>"
+        f"<span style='display:inline-block; width:11px; height:11px; "
+        f"border-radius:2px; background:{c}; margin-right:4px;'></span>"
+        f"<span style='color:{COLOR_MUTED}; font-size:0.82rem;'>{lbl}</span>"
+        f"</span>"
+        for c, lbl in (
+            (_COLOR_MA5, "MA5"),
+            (_COLOR_MA20, "MA20"),
+            (_COLOR_MA60, "MA60"),
+        )
+    )
     st.markdown(
         f"<div style='font-size:1.05rem; color:{COLOR_TEXT}; "
-        f"margin:4px 0 6px 4px; font-weight:600;'>"
+        f"margin:4px 0 2px 4px; font-weight:600;'>"
         f"{ticker} · {spec['price_chart_fmt'](last_close)} "
         f"<span style='color:{COLOR_MUTED}; font-weight:400; font-size:0.92rem;'>"
-        f"({last_date})</span></div>",
+        f"({last_date})</span></div>"
+        f"<div style='margin:0 0 6px 4px;'>{legend}</div>",
         unsafe_allow_html=True,
     )
 
+    # LWC 는 time 을 UNIX 초로 변환하며 naive datetime 은 서버 로컬 타임존으로
+    # 해석한다 (로컬 KST vs 클라우드 UTC 에서 날짜가 어긋남). UTC 자정으로 고정해
+    # 어느 환경에서나 동일한 날짜로 표시되게 한다.
+    view_times = df_view.index.tz_localize("UTC")
+
     candle_df = pd.DataFrame({
-        "time": df_view.index,
+        "time": view_times,
         "open": df_view["Open"].values,
         "high": df_view["High"].values,
         "low": df_view["Low"].values,
@@ -1006,7 +1084,7 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
         price_fmt: PriceFormatOptions | None = None,
     ) -> LineSeries:
         s = series.reindex(df_view.index)
-        line_df = pd.DataFrame({"time": s.index, "value": s.values}).dropna(subset=["value"])
+        line_df = pd.DataFrame({"time": view_times, "value": s.values}).dropna(subset=["value"])
         ls = LineSeries(
             data=line_df,
             column_mapping={"time": "time", "value": "value"},
@@ -1046,6 +1124,9 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
                 1: PaneHeightOptions(factor=1.0),
             },
         ),
+        # 일봉이라 시각(00:00) 표시 불필요 — 기본 time_visible=True 면 축/크로스헤어에
+        # "00:00" 가 붙어 날짜만 보이지 않는 문제. 날짜만 표시하도록 끈다.
+        time_scale=TimeScaleOptions(time_visible=False, seconds_visible=False),
     )
 
     chart = Chart(series=series, options=chart_opts)
@@ -1187,25 +1268,14 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
 def _render_remote_sync_badge() -> None:
     """사이드바 상단 — 자동 갱신(원격 캐시) 마지막 동기화 정보."""
     info = get_last_sync_info()
-    token_ok = has_auth_token()
 
     if info is None:
-        if not token_ok:
-            st.markdown(
-                f"<div style='font-size:0.78rem; color:{COLOR_MUTED}; line-height:1.35;'>"
-                f"자동 갱신: <span style='color:#ff9500;'>PAT 토큰 미설정</span><br>"
-                f"<span style='color:{COLOR_MUTED};'>private 레포는 토큰 필요 — "
-                f"<code>docs/auto-refresh-setup.md</code></span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f"<div style='font-size:0.78rem; color:{COLOR_MUTED};'>"
-                f"자동 갱신: <span style='color:#ff9500;'>원격 캐시 미확인</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
+        st.markdown(
+            f"<div style='font-size:0.78rem; color:{COLOR_MUTED};'>"
+            f"자동 갱신: <span style='color:#ff9500;'>원격 캐시 미확인</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
     else:
         # status → 색상/문구
         if info.status == "synced":
@@ -1214,8 +1284,6 @@ def _render_remote_sync_badge() -> None:
             color, label = "#10b981", "최신"
         elif info.status == "no_remote":
             color, label = "#ff9500", "원격 캐시 없음"
-        elif info.status == "auth_required":
-            color, label = "#ff9500", "PAT 토큰 필요"
         elif info.status == "disabled":
             color, label = COLOR_MUTED, "동기화 꺼짐"
         else:

@@ -361,7 +361,7 @@ _NOTRANSLATE_JS = """
             m.content = 'notranslate';
             (p.head || p.documentElement).appendChild(m);
         }
-    } catch (e) { /* iframe 권한 문제 시 무시 */ }
+    } catch (e) { /* 무시 */ }
 })();
 </script>
 """

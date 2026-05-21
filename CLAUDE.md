@@ -59,6 +59,18 @@
   `.streamlit/secrets.toml` 의 `github_cache_token`). Contents:Read-only 권한만.
 - 자세한 세팅은 [docs/auto-refresh-setup.md](docs/auto-refresh-setup.md) 참고
 
+### 캐시 유지보수 / 로딩 성능 (2026-05-21)
+- **유니버스 DB 캐싱**: 지수별 구성종목 목록을 `universe` 테이블에 저장.
+  화면 로드 시 FDR 네트워크 호출 없이 DB 에서 읽음 (`ui_load_index_tickers` DB 우선,
+  없을 때만 FDR 폴백 후 저장). 갱신(`refresh_cache.py`/새로고침 워커)이 최신 목록을
+  FDR 에서 받아 `cache_save_universe()` 로 저장. → 콜드 로딩 시 네트워크 지연/행 위험 제거.
+- **죽은 티커 자동 정리**: 갱신 시 **현재 유니버스에 없는** 티커의 시세 행을
+  `cache_prune_orphan_prices()` 로 삭제 (Actions/일회성=VACUUM 포함, 로컬 새로고침·동기화 merge 후=VACUUM 생략).
+  - ⚠️ **날짜 트리밍은 하지 않음** — 장기 차트를 위해 전체 기간 시세를 계속 누적 유지.
+  - 기존 누적 DB 1회 청소: `python -m scripts.prune_db_once [DB경로]`
+- **ATR 계산 최적화**: `calc_wilder_atr` 의 Wilder 평활 루프를 numpy 배열로 처리
+  (pandas `.iloc[]` 오버헤드 제거 — 전 종목 스크리닝 시 빌드 시간 단축). 결과값은 동일.
+
 ## 기술 스택
 - Python
 - Streamlit (웹 UI)

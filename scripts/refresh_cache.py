@@ -41,24 +41,27 @@ _FAILURE_RATE_THRESHOLD = 0.10  # 10%
 
 def _refresh_us() -> dict:
     """미국주식 지수(^IXIC, ^GSPC) + 나스닥·S&P500 시세 + 메타데이터 갱신."""
-    out: dict = {"market": "us", "indexes": {}, "prices": {}, "meta": {}}
+    out: dict = {"market": "us", "indexes": {}, "prices": {}}
 
     for code in ("^IXIC", "^GSPC"):
         out["indexes"][code] = batch.screen_refresh_index(code, days=300, force=False)
 
     nasdaq = us_get_nasdaq_tickers()
     sp500 = us_get_sp500_tickers()
+    # 구성종목 목록을 DB universe 에 저장 (화면 로드 시 네트워크 호출 제거)
+    cache.cache_save_universe("^IXIC", nasdaq)
+    cache.cache_save_universe("^GSPC", sp500)
     tickers = sorted(set(nasdaq) | set(sp500))
     out["prices"]["target_count"] = len(tickers)
     out["prices"]["result"] = batch.screen_refresh_prices(
         tickers, days=300, force=False, max_workers=4
     )
-
-    # 메타데이터 — TTL 7일 증분 (대다수는 skip, 신규/만료 종목만 yfinance .info 호출)
-    out["meta"]["target_count"] = len(tickers)
-    out["meta"]["result"] = batch.screen_refresh_meta(
+    # 메타(시총·한글명 등) — TTL 7일 증분. 평소엔 대부분 skip, 만료/신규만 yfinance .info 호출.
+    out["meta"] = batch.screen_refresh_meta(
         tickers, ttl_days=7, force=False, max_workers=4
     )
+    # 현재 유니버스에 없는 죽은 티커 정리 + VACUUM (push 할 DB 를 작게 유지)
+    out["pruned"] = cache.cache_prune_orphan_prices(vacuum=True)
     return out
 
 
@@ -73,20 +76,20 @@ def _refresh_kr() -> dict:
 
     kospi = kr_get_kospi_tickers()
     kosdaq = kr_get_kosdaq_tickers()
+    # 구성종목 목록을 DB universe 에 저장 (화면 로드 시 네트워크 호출 제거)
+    cache.cache_save_universe("KS11", kospi)
+    cache.cache_save_universe("KQ11", kosdaq)
     tickers = sorted(set(kospi) | set(kosdaq))
     out["prices"]["target_count"] = len(tickers)
     out["prices"]["result"] = batch_kr.screen_refresh_prices_kr(
         tickers, days=300, force=False, max_workers=8
     )
-
-    # 메타데이터 — FDR StockListing 한 번 호출로 전체 처리, TTL 7일 증분
-    out["meta"]["target_count"] = len(tickers)
-    out["meta"]["result"] = batch_kr.screen_refresh_meta_kr(
-        tickers, ttl_days=7, force=False
-    )
-
+    # 메타(market_cap 등) — FDR StockListing 한 번 호출로 전종목 처리, 빠름
+    out["meta"] = batch_kr.screen_refresh_meta_kr(tickers, ttl_days=7, force=False)
     # 관리/거래정지/시장경보 플래그 — 메타 갱신 *후* (caution_flags 복원), 매 실행
     out["risk"] = batch_kr.screen_refresh_risk_kr()
+    # 현재 유니버스에 없는 죽은 티커 정리 + VACUUM (push 할 DB 를 작게 유지)
+    out["pruned"] = cache.cache_prune_orphan_prices(vacuum=True)
     return out
 
 

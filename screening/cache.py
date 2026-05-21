@@ -24,7 +24,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 import pandas as pd
 
@@ -100,6 +100,17 @@ CREATE TABLE IF NOT EXISTS index_prices (
 )
 """
 
+# 지수별 구성종목(유니버스) 목록. 갱신 시 FDR 에서 받아 저장해두고,
+# 화면 로드 때는 외부 호출 없이 여기서 읽는다 (네트워크 구간 제거).
+_DDL_UNIVERSE = """
+CREATE TABLE IF NOT EXISTS universe (
+    index_code TEXT NOT NULL,
+    ticker     TEXT NOT NULL,
+    updated_at TEXT,
+    PRIMARY KEY (index_code, ticker)
+)
+"""
+
 _DDL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date)",
     "CREATE INDEX IF NOT EXISTS idx_index_prices_date ON index_prices(date)",
@@ -112,6 +123,7 @@ def init_cache() -> None:
         conn.execute(_DDL_PRICES)
         conn.execute(_DDL_METADATA)
         conn.execute(_DDL_INDEX_PRICES)
+        conn.execute(_DDL_UNIVERSE)
         for ddl in _DDL_INDEXES:
             conn.execute(ddl)
         _migrate_dollar_volume_column(conn)
@@ -211,6 +223,28 @@ def cache_save_prices(ticker: str, df: pd.DataFrame) -> None:
         conn.executemany(sql, rows)
 
 
+_PRICE_COLS = ["Open", "High", "Low", "Close", "Volume", "traded_value"]
+
+
+def _repair_ohlc(df: pd.DataFrame) -> pd.DataFrame:
+    """0/결측 OHL 행을 같은 행 Close 로 보정.
+
+    FDR 한국 데이터에서 거래 없는 날 등에 Open/High/Low 가 0(또는 결측)으로
+    들어오는 경우가 있다. 그대로 두면 차트가 0에서 솟는 거대 캔들을 그리고
+    ATR(True Range)이 폭주한다. Close 는 항상 유효하므로 0/결측 OHL 을 Close
+    로 채워 doji(평평한 봉)로 만든다. Close 만 쓰는 RS/거래대금에는 영향 없음.
+    """
+    if df.empty or "Close" not in df.columns:
+        return df
+    close = df["Close"]
+    for col in ("Open", "High", "Low"):
+        if col in df.columns:
+            bad = df[col].isna() | (df[col] <= 0)
+            if bad.any():
+                df.loc[bad, col] = close[bad]
+    return df
+
+
 def cache_load_prices(ticker: str, days: int | None = None) -> pd.DataFrame:
     """시세 조회.
 
@@ -232,7 +266,7 @@ def cache_load_prices(ticker: str, days: int | None = None) -> pd.DataFrame:
         )
 
     if df.empty:
-        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume", "traded_value"])
+        return pd.DataFrame(columns=_PRICE_COLS)
 
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date").sort_index()
@@ -245,9 +279,81 @@ def cache_load_prices(ticker: str, days: int | None = None) -> pd.DataFrame:
             "volume": "Volume",
         }
     )
+    df = _repair_ohlc(df)
     if days is not None and days > 0:
         df = df.tail(days)
     return df
+
+
+def cache_load_prices_bulk(
+    tickers: Iterable[str], days: int | None = None
+) -> dict[str, pd.DataFrame]:
+    """여러 티커의 시세를 **쿼리 1회**로 일괄 조회.
+
+    종목별 `cache_load_prices` 를 수천 번 호출하면 커넥션 open/close + 쿼리
+    왕복 오버헤드가 누적돼 전 종목 스크리닝이 수십 초~수 분 걸린다. 이 함수는
+    윈도우 함수(ROW_NUMBER)로 종목별 최근 `days` 행을 한 방에 가져와 pandas
+    groupby 로 분리한다 (≈20배 빠름).
+
+    Args:
+        tickers: 대상 티커. 정규화(대문자) 후 이 집합에 속한 것만 반환.
+        days: 종목별 최근 N영업일. None 이면 전체.
+
+    Returns:
+        {ticker(대문자): DataFrame}. 데이터 없는 티커는 키 부재.
+        각 DataFrame 은 `cache_load_prices` 와 동일 형식(OHLC 보정 포함).
+    """
+    tset = {str(t).strip().upper() for t in tickers if t and str(t).strip()}
+    if not tset:
+        return {}
+
+    with _connect() as conn:
+        # 원하는 티커만 임시테이블에 담아 JOIN — 윈도우 함수를 전체 테이블이 아닌
+        # 대상 종목으로만 좁힌다 (IN 절 파라미터 한계도 회피).
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS _wanted (ticker TEXT PRIMARY KEY)")
+        conn.execute("DELETE FROM _wanted")
+        conn.executemany(
+            "INSERT OR IGNORE INTO _wanted (ticker) VALUES (?)",
+            [(t,) for t in tset],
+        )
+        if days is not None and days > 0:
+            sql = (
+                "SELECT ticker, date, open, high, low, close, volume, traded_value FROM ("
+                "  SELECT p.ticker, p.date, p.open, p.high, p.low, p.close, "
+                "         p.volume, p.traded_value, "
+                "         ROW_NUMBER() OVER (PARTITION BY p.ticker ORDER BY p.date DESC) AS rn "
+                "  FROM prices p JOIN _wanted w ON p.ticker = w.ticker"
+                ") WHERE rn <= ? ORDER BY ticker ASC, date ASC"
+            )
+            df = pd.read_sql_query(sql, conn, params=(int(days),))
+        else:
+            df = pd.read_sql_query(
+                "SELECT p.ticker, p.date, p.open, p.high, p.low, p.close, "
+                "p.volume, p.traded_value "
+                "FROM prices p JOIN _wanted w ON p.ticker = w.ticker "
+                "ORDER BY p.ticker ASC, p.date ASC",
+                conn,
+            )
+
+    if df.empty:
+        return {}
+
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.rename(
+        columns={
+            "open": "Open",
+            "high": "High",
+            "low": "Low",
+            "close": "Close",
+            "volume": "Volume",
+        }
+    )
+
+    out: dict[str, pd.DataFrame] = {}
+    for tk, g in df.groupby("ticker", sort=False):
+        g = g.drop(columns=["ticker"]).set_index("date").sort_index()
+        out[str(tk)] = _repair_ohlc(g[_PRICE_COLS])
+    return out
 
 
 def cache_delete_prices(ticker: str) -> int:
@@ -285,6 +391,89 @@ def cache_get_all_last_price_dates() -> dict[str, str]:
             "SELECT ticker, MAX(date) FROM prices GROUP BY ticker"
         ).fetchall()
     return {str(t): str(d) for t, d in rows if d is not None}
+
+
+# ---------------------------------------------------------------------------
+# 유니버스 (지수별 구성종목 목록)
+# ---------------------------------------------------------------------------
+
+def cache_save_universe(index_code: str, tickers: Iterable[str]) -> int:
+    """지수 구성종목 목록을 통째로 교체 저장 (해당 index_code 의 기존 행 삭제 후 삽입).
+
+    Args:
+        index_code: 지수 코드 (예: "^IXIC", "KS11").
+        tickers: 구성종목 티커 리스트. 대문자/공백 정규화.
+
+    Returns:
+        저장된 티커 수.
+    """
+    code = str(index_code).strip()
+    norm = []
+    seen: set[str] = set()
+    for t in tickers:
+        if not t or not str(t).strip():
+            continue
+        u = str(t).strip().upper()
+        if u in seen:
+            continue
+        seen.add(u)
+        norm.append(u)
+    updated_at = _utc_now_iso()
+    with _connect() as conn:
+        conn.execute("DELETE FROM universe WHERE index_code = ?", (code,))
+        if norm:
+            conn.executemany(
+                "INSERT OR REPLACE INTO universe (index_code, ticker, updated_at) "
+                "VALUES (?, ?, ?)",
+                [(code, t, updated_at) for t in norm],
+            )
+    return len(norm)
+
+
+def cache_load_universe(index_code: str) -> list[str]:
+    """지수 구성종목 목록 조회. 저장된 게 없으면 빈 리스트."""
+    code = str(index_code).strip()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ticker FROM universe WHERE index_code = ? ORDER BY ticker ASC",
+            (code,),
+        ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+def cache_prune_orphan_prices(vacuum: bool = False) -> int:
+    """현재 유니버스(어느 지수에도) 속하지 않은 티커의 시세 행을 삭제.
+
+    상장폐지·지수 편출 등으로 더는 스크리닝 대상이 아닌 종목의 옛 시세가
+    `prices` 에 무한정 쌓이는 것을 막는다. **날짜 트리밍은 하지 않는다**
+    (장기 차트를 위해 전체 기간 누적 유지).
+
+    안전장치: `universe` 테이블이 비어 있으면(아직 한 번도 저장 안 됨) 아무것도
+    삭제하지 않는다 — 전체 시세가 통째로 날아가는 사고 방지.
+
+    Args:
+        vacuum: True 면 삭제 후 VACUUM 으로 파일 크기까지 회수
+            (느림, 클라우드 갱신/일회성 청소에만 사용 권장).
+
+    Returns:
+        삭제된 시세 행 수.
+    """
+    with _connect() as conn:
+        u_count = conn.execute("SELECT COUNT(*) FROM universe").fetchone()[0]
+        if not u_count:
+            return 0
+        cur = conn.execute(
+            "DELETE FROM prices WHERE ticker NOT IN (SELECT ticker FROM universe)"
+        )
+        deleted = int(cur.rowcount or 0)
+    if vacuum and deleted:
+        # VACUUM 은 트랜잭션 밖에서 단독 실행해야 함
+        conn2 = sqlite3.connect(_db_path())
+        try:
+            conn2.execute("VACUUM")
+        finally:
+            conn2.close()
+    return deleted
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +578,36 @@ def update_risk_flags(flags: dict) -> None:
                 "UPDATE metadata SET is_risk = ?, caution_flags = ? WHERE ticker = ?",
                 (1 if info.get("is_risk") else 0, caution, t),
             )
+
+
+def cache_load_meta_bulk(tickers: Iterable[str]) -> dict[str, dict]:
+    """여러 티커의 메타를 **쿼리 1회**로 일괄 조회. 형식은 `cache_load_meta` 와 동일."""
+    tset = {str(t).strip().upper() for t in tickers if t and str(t).strip()}
+    if not tset:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ticker, name_en, name_kr, sector, country, exchange, "
+            "market_cap, is_china, is_risk, caution_flags, updated_at FROM metadata"
+        ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        tk = str(r[0])
+        if tk not in tset:
+            continue
+        out[tk] = {
+            "name_en": r[1],
+            "name_kr": r[2],
+            "sector": r[3],
+            "country": r[4],
+            "exchange": r[5],
+            "market_cap": r[6],
+            "is_china": bool(r[7]) if r[7] is not None else None,
+            "is_risk": bool(r[8]) if r[8] is not None else None,
+            "caution_flags": r[9],
+            "updated_at": r[10],
+        }
+    return out
 
 
 def cache_meta_age_days(ticker: str) -> int | None:

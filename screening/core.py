@@ -33,14 +33,15 @@ from __future__ import annotations
 
 from typing import Iterable
 
+import numpy as np
 import pandas as pd
 
 from .cache import (
     cache_get_all_last_price_dates,
     cache_get_last_index_date,
     cache_load_index,
-    cache_load_meta,
-    cache_load_prices,
+    cache_load_meta_bulk,
+    cache_load_prices_bulk,
 )
 from .china_filter import is_china_ticker
 
@@ -100,20 +101,24 @@ def calc_wilder_atr(
         axis=1,
     ).max(axis=1)
 
-    nan = float("nan")
-    atr = pd.Series(nan, index=tr.index, dtype=float)
-    if len(tr) < period:
-        return atr
+    n = len(tr)
+    atr_arr = np.full(n, np.nan, dtype=float)
+    if n < period:
+        return pd.Series(atr_arr, index=tr.index, dtype=float)
 
-    initial = tr.iloc[1 : period + 1].mean()
-    atr.iloc[period] = initial
-    for i in range(period + 1, len(tr)):
-        prev_atr = atr.iloc[i - 1]
-        tr_i = tr.iloc[i]
-        if pd.isna(prev_atr) or pd.isna(tr_i):
+    # numpy 배열 위에서 Wilder 평활(순차 점화식)을 계산 — pandas .iloc[] 인덱싱
+    # 오버헤드 제거. 전 종목 루프(수천 회 호출)에서 큰 차이.
+    tr_arr = tr.to_numpy(dtype=float)
+    init_slice = tr_arr[1 : period + 1]
+    initial = np.nanmean(init_slice) if init_slice.size else np.nan
+    atr_arr[period] = initial
+    for i in range(period + 1, n):
+        prev_atr = atr_arr[i - 1]
+        tr_i = tr_arr[i]
+        if np.isnan(prev_atr) or np.isnan(tr_i):
             continue
-        atr.iloc[i] = (prev_atr * (period - 1) + tr_i) / period
-    return atr
+        atr_arr[i] = (prev_atr * (period - 1) + tr_i) / period
+    return pd.Series(atr_arr, index=tr.index, dtype=float)
 
 
 def _recent_atr_drop_multiple(
@@ -206,19 +211,24 @@ def screen_build_screening_df(
     rows: list[dict] = []
     seen: set[str] = set()
 
-    for raw in tickers:
-        if not raw:
-            continue
-        t = str(raw).strip().upper()
-        if not t or t in seen:
+    # 종목별 개별 쿼리(2회×수천종목) 대신 일괄 조회 — 커넥션/왕복 오버헤드 제거.
+    # 변동폭 계산은 prev_close 용 1일 여유가 필요, 안전 여유 +5
+    norm_tickers = [str(t).strip().upper() for t in tickers if t and str(t).strip()]
+    prices_map = cache_load_prices_bulk(norm_tickers, days=lookback_days + 5)
+    meta_map = cache_load_meta_bulk(norm_tickers)
+    empty_prices = pd.DataFrame(
+        columns=["Open", "High", "Low", "Close", "Volume", "traded_value"]
+    )
+
+    for t in norm_tickers:
+        if t in seen:
             continue
         seen.add(t)
 
-        # 변동폭 계산은 prev_close 용 1일 여유가 필요, 안전 여유 +5
-        prices = cache_load_prices(t, days=lookback_days + 5)
-        meta = cache_load_meta(t) or {}
+        prices = prices_map.get(t, empty_prices)
+        meta = meta_map.get(t) or {}
 
-        if (prices is None or prices.empty) and not meta:
+        if prices.empty and not meta:
             continue
 
         last_price = _last_close(prices)
@@ -337,7 +347,8 @@ def screen_apply_filters(
     # 3) 시가총액 (min_market_cap > 0 일 때만 적용)
     min_mc = float(cfg.get("min_market_cap", 0.0))
     if min_mc > 0 and "market_cap" in current.columns:
-        mask_mc = current["market_cap"].fillna(-1.0) >= min_mc
+        # NaN(메타 없음) = 모름 → 통과, 값이 있을 때만 필터 적용
+        mask_mc = current["market_cap"].isna() | (current["market_cap"] >= min_mc)
         current = current[mask_mc]
     stats["after_market_cap"] = int(len(current))
 
@@ -578,15 +589,15 @@ def screen_rank_rs(
     rows: list[dict] = []
     seen: set[str] = set()
 
-    for raw in tickers:
-        if not raw:
-            continue
-        t = str(raw).strip().upper()
-        if not t or t in seen:
+    norm_tickers = [str(t).strip().upper() for t in tickers if t and str(t).strip()]
+    prices_map = cache_load_prices_bulk(norm_tickers, days=days)
+
+    for t in norm_tickers:
+        if t in seen:
             continue
         seen.add(t)
 
-        prices = cache_load_prices(t, days=days)
+        prices = prices_map.get(t)
         if prices is None or prices.empty:
             continue
 

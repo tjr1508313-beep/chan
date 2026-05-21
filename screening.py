@@ -12,6 +12,8 @@
 탭으로 붙일 예정.
 """
 
+import logging
+
 import streamlit as st
 
 from screening.auth import require_password
@@ -19,6 +21,8 @@ from screening.cache import init_cache
 from screening.cache_sync import sync_from_remote
 from screening.theme import apply_theme
 from screening.ui import render_screening_page
+
+_LOG = logging.getLogger(__name__)
 
 
 @st.cache_resource(show_spinner=False)
@@ -28,7 +32,10 @@ def _sync_remote_cache_once():
     Streamlit rerun 마다 재호출 방지를 위해 `cache_resource` 사용.
     네트워크 실패는 silent — UI 배지로만 노출.
     """
-    return sync_from_remote(force=False)
+    result = sync_from_remote(force=False)
+    _LOG.info("cache sync: status=%s bytes=%s error=%s",
+              result.status, result.bytes_downloaded, result.error)
+    return result
 
 
 @st.cache_resource(show_spinner=False)
