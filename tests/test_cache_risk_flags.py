@@ -49,3 +49,17 @@ def test_update_risk_flags_sets_and_clears(tmp_db):
 def test_update_risk_flags_skips_unknown_ticker(tmp_db):
     cache.update_risk_flags({"999999": {"is_risk": True, "labels": ["관리"]}})
     assert cache.cache_load_meta("999999") is None
+
+
+def test_update_risk_flags_preserves_us_is_risk(tmp_db):
+    # 미국 알파벳 티커 (is_risk=True) + 한국 6자리 티커
+    cache.cache_save_meta("AAPL", {
+        "name_en": "Apple", "name_kr": None, "sector": None,
+        "country": "United States", "exchange": "NASDAQ",
+        "market_cap": 3e12, "is_china": False, "is_risk": True,
+    })
+    _seed_meta("005930")  # KR, is_risk False
+    # KR 플래그 갱신 — 미국 행은 건드리면 안 됨
+    cache.update_risk_flags({"005930": {"is_risk": True, "labels": ["관리"]}})
+    assert cache.cache_load_meta("AAPL")["is_risk"] is True   # 미국 보존
+    assert cache.cache_load_meta("005930")["is_risk"] is True

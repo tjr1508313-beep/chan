@@ -374,7 +374,11 @@ def update_risk_flags(flags: dict) -> None:
     """
     with _connect() as conn:
         existing = {r[0] for r in conn.execute("SELECT ticker FROM metadata").fetchall()}
-        conn.execute("UPDATE metadata SET is_risk = 0, caution_flags = NULL")
+        # 한국 6자리 숫자 티커만 클리어 — 같은 metadata 테이블의 미국 종목 is_risk 보존
+        conn.execute(
+            "UPDATE metadata SET is_risk = 0, caution_flags = NULL "
+            "WHERE ticker GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'"
+        )
         for code, info in flags.items():
             t = str(code).strip().upper()
             if t not in existing:
