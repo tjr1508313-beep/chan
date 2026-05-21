@@ -53,10 +53,13 @@ def kr_get_meta(ticker: str) -> dict:
 - **휴장일/시간대**: KRX 휴장일은 미국과 다름. 캐시 갱신 시 KST 기준으로 마감 판정 필요
 - **레이트 리밋**: FDR 은 명시적 limit 없으나 안정성 위해 `sleep 0.1~0.2s/건` 권장
 
-## 관리종목/거래정지 식별 — **Phase 2 본 트랙 보류**
-- pykrx 가 KRX 공시 데이터로 가장 깔끔하지만 인증 필요 → MVP 부담
-- FDR `StockListing` 의 `Dept` 컬럼은 시장 분류(중견기업부/우량기업부/벤처기업부 등)일 뿐 관리종목 정보 아님
-- **MVP 결정**: 거래대금 300억 원 필터로 대부분 자연 탈락 → 본 트랙 보류, 추후 별도 모듈로 추가 검토
+## 관리종목/거래정지 식별 — ✅ 해소 (LS증권 OpenAPI)
+- `screening/kr_risk.py` — LS증권 REST OpenAPI 클라이언트
+- **제외**: 관리종목·거래정지·정리매매 (`is_risk=True`)
+- **참고 배지**: 투자경고·투자주의·단기과열 (제외 안 함, `caution_flags` 컬럼)
+- 키 미설정 시 graceful degrade (플래그 미변경, 갱신 정상 완료)
+- 키 세팅: `.streamlit/secrets.toml` 의 `ls_app_key`/`ls_app_secret` 또는 환경변수 `LS_APP_KEY`/`LS_APP_SECRET`
+- ⚠️ `kr_risk._collect_raw_designations` 의 tr_cd/path 가 플레이스홀더 — LS 라이브 테스트베드 응답으로 확정 필요
 
 ## 타 에이전트와의 경계
 - 캐시 저장 / RS 계산 / 필터 최종 적용은 **백엔드 담당**
