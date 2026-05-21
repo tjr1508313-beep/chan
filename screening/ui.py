@@ -126,7 +126,7 @@ def ui_load_ranked_df(
 
     ranked = screen_rank_rs(passing, index_code, period=rs_period, top_n=top_n)
     if not ranked.empty:
-        meta_cols = filtered[["name_en", "name_kr", "avg_traded_value_20d", "market_cap"]]
+        meta_cols = filtered[["name_en", "name_kr", "avg_traded_value_20d", "market_cap", "caution_flags"]]
         ranked = ranked.merge(meta_cols, left_on="ticker", right_index=True, how="left")
     return ranked, stats
 
@@ -438,11 +438,11 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
                     key=_key(spec, "filter_exclude_china"),
                 )
             exclude_risk = st.checkbox(
-                "관리/위험종목 제외", value=True,
+                "관리·거래정지/정리매매 제외", value=True,
                 key=_key(spec, "filter_exclude_risk"),
                 help=(
-                    "KRX 공시 기반 관리종목/투자주의/거래정지 제외. "
-                    "위험종목 데이터를 사이드바 새로고침에서 갱신해야 효과가 적용됩니다."
+                    "LS증권 데이터 기반 관리종목·거래정지·정리매매 종목을 제외합니다. "
+                    "투자경고/투자주의/단기과열은 제외하지 않고 참고 배지로만 표시합니다."
                     if spec["code"] == "kr" else None
                 ),
             )
@@ -803,6 +803,27 @@ def _fmt_cell(value, fmt: str, na: str = "—") -> str:
         return str(value)
 
 
+_CAUTION_SHORT = {
+    "투자경고": "투경", "투자주의": "투주", "단기과열": "과열",
+    "관리": "관리", "거래정지": "정지", "정리매매": "정리",
+}
+
+
+def _caution_badge_md(caution_flags) -> str:
+    """caution_flags(콤마조인 문자열) → 버튼 라벨용 마크다운 색상 배지 문자열.
+
+    빈 값/NaN 이면 빈 문자열. UI 버튼 라벨이 마크다운이라 :orange[...] directive 사용.
+    """
+    if not isinstance(caution_flags, str) or not caution_flags.strip():
+        return ""
+    tags = [
+        f":orange[{_CAUTION_SHORT.get(x.strip(), x.strip())}]"
+        for x in caution_flags.split(",")
+        if x.strip()
+    ]
+    return " ".join(tags)
+
+
 def _render_ranking_table(
     spec: dict, ranked: pd.DataFrame, rs_period: int
 ) -> str | None:
@@ -871,6 +892,9 @@ def _render_ranking_table(
             name_raw = r.get("name_kr") or r.get("name_en") or ticker
             below_ma5 = bool(r.get("below_ma5", False))
             name_display = f"{name_raw} :red[(이탈)]" if below_ma5 else name_raw
+            _badge = _caution_badge_md(r.get("caution_flags"))
+            if _badge:
+                name_display = f"{name_display} {_badge}"
 
             rs_w = r.get("rs_weighted")
             cells: list[str] = [
