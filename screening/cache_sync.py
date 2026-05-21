@@ -273,6 +273,13 @@ def _apply_remote(tmp_remote: Path) -> tuple[str, int]:
             conn.execute("DETACH DATABASE oldlocal")
         finally:
             conn.close()
+        # merge 는 로컬-기존의 죽은 티커를 INSERT OR IGNORE 로 되살릴 수 있으므로
+        # 원격 universe 기준으로 한 번 더 정리 (날짜 트리밍은 안 함)
+        try:
+            from .cache import cache_prune_orphan_prices
+            cache_prune_orphan_prices(vacuum=False)
+        except Exception:
+            pass
     except Exception:
         # 롤백 — 원본 복원, 받은 원격은 폐기
         try:

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+import numpy as np
 import pandas as pd
 
 from .cache import (
@@ -99,20 +100,24 @@ def calc_wilder_atr(
         axis=1,
     ).max(axis=1)
 
-    nan = float("nan")
-    atr = pd.Series(nan, index=tr.index, dtype=float)
-    if len(tr) < period:
-        return atr
+    n = len(tr)
+    atr_arr = np.full(n, np.nan, dtype=float)
+    if n < period:
+        return pd.Series(atr_arr, index=tr.index, dtype=float)
 
-    initial = tr.iloc[1 : period + 1].mean()
-    atr.iloc[period] = initial
-    for i in range(period + 1, len(tr)):
-        prev_atr = atr.iloc[i - 1]
-        tr_i = tr.iloc[i]
-        if pd.isna(prev_atr) or pd.isna(tr_i):
+    # numpy 배열 위에서 Wilder 평활(순차 점화식)을 계산 — pandas .iloc[] 인덱싱
+    # 오버헤드 제거. 전 종목 루프(수천 회 호출)에서 큰 차이.
+    tr_arr = tr.to_numpy(dtype=float)
+    init_slice = tr_arr[1 : period + 1]
+    initial = np.nanmean(init_slice) if init_slice.size else np.nan
+    atr_arr[period] = initial
+    for i in range(period + 1, n):
+        prev_atr = atr_arr[i - 1]
+        tr_i = tr_arr[i]
+        if np.isnan(prev_atr) or np.isnan(tr_i):
             continue
-        atr.iloc[i] = (prev_atr * (period - 1) + tr_i) / period
-    return atr
+        atr_arr[i] = (prev_atr * (period - 1) + tr_i) / period
+    return pd.Series(atr_arr, index=tr.index, dtype=float)
 
 
 def _recent_atr_drop_multiple(

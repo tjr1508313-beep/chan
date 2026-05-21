@@ -40,6 +40,9 @@ from .cache import (
     cache_get_all_last_price_dates,
     cache_load_index,
     cache_load_prices,
+    cache_load_universe,
+    cache_prune_orphan_prices,
+    cache_save_universe,
 )
 from .cache_sync import get_last_sync_info, sync_from_remote
 from .core import (
@@ -80,9 +83,8 @@ _INDEX_DISPLAY = {
 
 # ─── 데이터 획득 (캐시된 헬퍼) ─────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def ui_load_index_tickers(index_code: str) -> list[str]:
-    """지수 구성종목 티커 리스트. FDR 호출 비용 있어 1시간 캐시."""
+def _fetch_index_tickers_from_source(index_code: str) -> list[str]:
+    """FDR 등 외부 소스에서 지수 구성종목을 직접 조회 (네트워크)."""
     if index_code == "^IXIC":
         return us_get_nasdaq_tickers()
     if index_code == "^GSPC":
@@ -92,6 +94,30 @@ def ui_load_index_tickers(index_code: str) -> list[str]:
     if index_code == "KQ11":
         return kr_get_kosdaq_tickers()
     return []
+
+
+def ui_refresh_index_universe(index_code: str) -> list[str]:
+    """외부 소스에서 최신 구성종목을 받아 DB universe 에 저장하고 반환.
+
+    갱신(새로고침/Actions) 경로 전용 — 항상 네트워크를 타서 최신 목록을 확보한다.
+    """
+    tickers = _fetch_index_tickers_from_source(index_code)
+    if tickers:
+        cache_save_universe(index_code, tickers)
+    return tickers
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def ui_load_index_tickers(index_code: str) -> list[str]:
+    """지수 구성종목 티커 리스트 (화면/스크리닝용).
+
+    DB `universe` 테이블을 먼저 읽어 **외부 호출 없이** 반환한다. 저장된 게
+    없을 때(새 체크아웃 등)만 FDR 로 폴백하고, 받은 목록을 DB 에 저장해둔다.
+    """
+    cached = cache_load_universe(index_code)
+    if cached:
+        return cached
+    return ui_refresh_index_universe(index_code)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -523,6 +549,12 @@ def _refresh_worker(
             f"skipped={meta_result['skipped']}, "
             f"failed={len(meta_result['failed'])}"
         )
+
+        # 현재 유니버스에 없는 죽은 티커 시세 정리 (날짜 트리밍은 안 함)
+        pruned = cache_prune_orphan_prices(vacuum=False)
+        if pruned:
+            job["messages"].append(f"정리: 죽은 티커 시세 {pruned:,}행 삭제")
+
         job["phase"] = "완료"
     except Exception as e:  # 스레드 경계 — 예외를 job 에 담아 UI 로 전달
         job["error"] = str(e)
@@ -539,7 +571,8 @@ def _start_refresh(spec: dict, index_code: str, force: bool) -> None:
     if existing and existing.get("running"):
         return
 
-    tickers = ui_load_index_tickers(index_code)
+    # 새로고침은 최신 구성종목을 외부 소스에서 받아 universe 갱신 (편입/편출 반영)
+    tickers = ui_refresh_index_universe(index_code)
     if not tickers:
         st.session_state[job_key] = {
             "running": False,
@@ -773,6 +806,25 @@ def _make_pick_callback(spec: dict, ticker: str):
     return _cb
 
 
+def _first_valid_name(*candidates: object) -> str:
+    """후보 중 첫 '유효한 종목명 문자열' 반환 (NaN/None/빈문자 건너뜀).
+
+    마지막 후보(보통 ticker)는 항상 문자열이라 폴백으로 안전하다.
+    """
+    for c in candidates:
+        if c is None:
+            continue
+        try:
+            if pd.isna(c):  # float NaN 등
+                continue
+        except (TypeError, ValueError):
+            pass
+        s = str(c).strip()
+        if s:
+            return s
+    return ""
+
+
 def _fmt_cell(value, fmt: str, na: str = "—") -> str:
     """안전 포맷 — NaN/None 이면 na 반환.
 
@@ -872,7 +924,10 @@ def _render_ranking_table(
         for row_pos, row in enumerate(ranked.itertuples(index=False)):
             r = row._asdict()
             ticker = str(r["ticker"])
-            name_raw = r.get("name_kr") or r.get("name_en") or ticker
+            # 메타 미보유 종목은 name_kr/name_en 이 NaN(float)으로 들어온다.
+            # NaN 은 truthy 라 `a or b or c` 로 거르면 NaN 이 그대로 새어나가
+            # 버튼 라벨(문자열 필수)에서 TypeError 가 난다 → 명시적으로 검사.
+            name_raw = _first_valid_name(r.get("name_kr"), r.get("name_en"), ticker)
             below_ma5 = bool(r.get("below_ma5", False))
             name_display = f"{name_raw} :red[(이탈)]" if below_ma5 else name_raw
 

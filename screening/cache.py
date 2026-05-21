@@ -99,6 +99,17 @@ CREATE TABLE IF NOT EXISTS index_prices (
 )
 """
 
+# 지수별 구성종목(유니버스) 목록. 갱신 시 FDR 에서 받아 저장해두고,
+# 화면 로드 때는 외부 호출 없이 여기서 읽는다 (네트워크 구간 제거).
+_DDL_UNIVERSE = """
+CREATE TABLE IF NOT EXISTS universe (
+    index_code TEXT NOT NULL,
+    ticker     TEXT NOT NULL,
+    updated_at TEXT,
+    PRIMARY KEY (index_code, ticker)
+)
+"""
+
 _DDL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date)",
     "CREATE INDEX IF NOT EXISTS idx_index_prices_date ON index_prices(date)",
@@ -111,6 +122,7 @@ def init_cache() -> None:
         conn.execute(_DDL_PRICES)
         conn.execute(_DDL_METADATA)
         conn.execute(_DDL_INDEX_PRICES)
+        conn.execute(_DDL_UNIVERSE)
         for ddl in _DDL_INDEXES:
             conn.execute(ddl)
         _migrate_dollar_volume_column(conn)
@@ -370,6 +382,89 @@ def cache_get_all_last_price_dates() -> dict[str, str]:
             "SELECT ticker, MAX(date) FROM prices GROUP BY ticker"
         ).fetchall()
     return {str(t): str(d) for t, d in rows if d is not None}
+
+
+# ---------------------------------------------------------------------------
+# 유니버스 (지수별 구성종목 목록)
+# ---------------------------------------------------------------------------
+
+def cache_save_universe(index_code: str, tickers: Iterable[str]) -> int:
+    """지수 구성종목 목록을 통째로 교체 저장 (해당 index_code 의 기존 행 삭제 후 삽입).
+
+    Args:
+        index_code: 지수 코드 (예: "^IXIC", "KS11").
+        tickers: 구성종목 티커 리스트. 대문자/공백 정규화.
+
+    Returns:
+        저장된 티커 수.
+    """
+    code = str(index_code).strip()
+    norm = []
+    seen: set[str] = set()
+    for t in tickers:
+        if not t or not str(t).strip():
+            continue
+        u = str(t).strip().upper()
+        if u in seen:
+            continue
+        seen.add(u)
+        norm.append(u)
+    updated_at = _utc_now_iso()
+    with _connect() as conn:
+        conn.execute("DELETE FROM universe WHERE index_code = ?", (code,))
+        if norm:
+            conn.executemany(
+                "INSERT OR REPLACE INTO universe (index_code, ticker, updated_at) "
+                "VALUES (?, ?, ?)",
+                [(code, t, updated_at) for t in norm],
+            )
+    return len(norm)
+
+
+def cache_load_universe(index_code: str) -> list[str]:
+    """지수 구성종목 목록 조회. 저장된 게 없으면 빈 리스트."""
+    code = str(index_code).strip()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT ticker FROM universe WHERE index_code = ? ORDER BY ticker ASC",
+            (code,),
+        ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+def cache_prune_orphan_prices(vacuum: bool = False) -> int:
+    """현재 유니버스(어느 지수에도) 속하지 않은 티커의 시세 행을 삭제.
+
+    상장폐지·지수 편출 등으로 더는 스크리닝 대상이 아닌 종목의 옛 시세가
+    `prices` 에 무한정 쌓이는 것을 막는다. **날짜 트리밍은 하지 않는다**
+    (장기 차트를 위해 전체 기간 누적 유지).
+
+    안전장치: `universe` 테이블이 비어 있으면(아직 한 번도 저장 안 됨) 아무것도
+    삭제하지 않는다 — 전체 시세가 통째로 날아가는 사고 방지.
+
+    Args:
+        vacuum: True 면 삭제 후 VACUUM 으로 파일 크기까지 회수
+            (느림, 클라우드 갱신/일회성 청소에만 사용 권장).
+
+    Returns:
+        삭제된 시세 행 수.
+    """
+    with _connect() as conn:
+        u_count = conn.execute("SELECT COUNT(*) FROM universe").fetchone()[0]
+        if not u_count:
+            return 0
+        cur = conn.execute(
+            "DELETE FROM prices WHERE ticker NOT IN (SELECT ticker FROM universe)"
+        )
+        deleted = int(cur.rowcount or 0)
+    if vacuum and deleted:
+        # VACUUM 은 트랜잭션 밖에서 단독 실행해야 함
+        conn2 = sqlite3.connect(_db_path())
+        try:
+            conn2.execute("VACUUM")
+        finally:
+            conn2.close()
+    return deleted
 
 
 # ---------------------------------------------------------------------------
