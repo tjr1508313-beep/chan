@@ -84,6 +84,9 @@ def _refresh_kr() -> dict:
     out["meta"]["result"] = batch_kr.screen_refresh_meta_kr(
         tickers, ttl_days=7, force=False
     )
+
+    # 관리/거래정지/시장경보 플래그 — 메타 갱신 *후* (caution_flags 복원), 매 실행
+    out["risk"] = batch_kr.screen_refresh_risk_kr()
     return out
 
 
