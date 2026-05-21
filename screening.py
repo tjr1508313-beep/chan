@@ -51,6 +51,15 @@ def main() -> None:
     )
     apply_theme()
 
+    # LS증권 OpenAPI 키: secrets.toml → os.environ (kr_risk 는 streamlit 비의존, env 만 읽음)
+    import os
+    for _src, _dst in (("ls_app_key", "LS_APP_KEY"), ("ls_app_secret", "LS_APP_SECRET")):
+        try:
+            if _dst not in os.environ and _src in st.secrets:
+                os.environ[_dst] = str(st.secrets[_src])
+        except Exception:
+            pass  # secrets.toml 없으면 무시 (graceful)
+
     # 원격 캐시 동기화는 init_cache() 보다 먼저.
     # 받은 DB 가 스키마가 부족해도 init_cache() 가 CREATE IF NOT EXISTS 로 보강.
     _sync_remote_cache_once()
