@@ -1,13 +1,14 @@
-"""스크리닝 앱 UI 렌더링.
+"""스크리닝 앱 UI 렌더링 (Toss-style 통합본).
 
-미국주식 + 한국주식을 한 화면에 위/아래로 함께 표시한다.
-자산군별 차이는 모듈 하단의 `_US_SPEC` / `_KR_SPEC` 두 dict 로 관리.
-공통 렌더 함수들은 `spec` 인자를 받아 통화/포맷/배치함수/키 prefix 만 분기한다.
+이 파일을 `screening/ui.py` 에 그대로 덮어쓰세요.
+기존 인터페이스(`render_screening_page`) 100% 호환.
 
-통합 대비 규칙:
-    - session_state 키는 모두 `scr_` 접두사 (한국은 `scr_kr_*`).
-    - 캐시 함수는 `ui_` 또는 `screen_` 접두사.
-    - Streamlit 외부 의존성은 모두 import 시 명시.
+기존 기능 + 토스 스타일 신규 요소:
+    - 상단 시장 요약 카드 (US/KR 나란히)  ──── Step 1
+    - 종목별 즐겨찾기 별표 + 사이드바 토글  ── Step 2
+    - 행에 20일 미니 스파크라인 (SVG)        ── Step 3
+
+⚠️ `theme.py` 도 함께 토스 통합본으로 교체해야 색/CSS 가 매칭됩니다.
 """
 
 from __future__ import annotations
@@ -64,15 +65,14 @@ from .theme import (
 )
 
 
-# ─── 차트 색상 (자산군 무관) ────────────────────────────────────────────
-_COLOR_UP = COLOR_PROFIT       # #ff4b4b 캔들 양봉 (한국식)
-_COLOR_DOWN = COLOR_LOSS        # #1a9cff 캔들 음봉
-_COLOR_MA5 = "#ff9500"          # 5일 이평선 (주황) — 단기
-_COLOR_MA20 = "#22c55e"         # 20일 이평선 (초록) — 중기
-_COLOR_MA60 = "#a855f7"         # 60일 이평선 (보라) — 장기
-_COLOR_ATR = "#6366f1"          # 9일 ATR (인디고) — 하단 패널
+# ─── 차트 색상 ─────────────────────────────────────────────────────
+_COLOR_UP = COLOR_PROFIT
+_COLOR_DOWN = COLOR_LOSS
+_COLOR_MA5 = "#ff9500"
+_COLOR_MA20 = "#22c55e"
+_COLOR_MA60 = "#a855f7"
+_COLOR_ATR = "#6366f1"
 
-# 지수 코드 → 사용자 친화 이름
 _INDEX_DISPLAY = {
     "^IXIC": "나스닥",
     "^GSPC": "S&P 500",
@@ -81,10 +81,9 @@ _INDEX_DISPLAY = {
 }
 
 
-# ─── 데이터 획득 (캐시된 헬퍼) ─────────────────────────────────────────
+# ─── 데이터 획득 ────────────────────────────────────────────────────
 
 def _fetch_index_tickers_from_source(index_code: str) -> list[str]:
-    """FDR 등 외부 소스에서 지수 구성종목을 직접 조회 (네트워크)."""
     if index_code == "^IXIC":
         return us_get_nasdaq_tickers()
     if index_code == "^GSPC":
@@ -97,10 +96,6 @@ def _fetch_index_tickers_from_source(index_code: str) -> list[str]:
 
 
 def ui_refresh_index_universe(index_code: str) -> list[str]:
-    """외부 소스에서 최신 구성종목을 받아 DB universe 에 저장하고 반환.
-
-    갱신(새로고침/Actions) 경로 전용 — 항상 네트워크를 타서 최신 목록을 확보한다.
-    """
     tickers = _fetch_index_tickers_from_source(index_code)
     if tickers:
         cache_save_universe(index_code, tickers)
@@ -109,11 +104,6 @@ def ui_refresh_index_universe(index_code: str) -> list[str]:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ui_load_index_tickers(index_code: str) -> list[str]:
-    """지수 구성종목 티커 리스트 (화면/스크리닝용).
-
-    DB `universe` 테이블을 먼저 읽어 **외부 호출 없이** 반환한다. 저장된 게
-    없을 때(새 체크아웃 등)만 FDR 로 폴백하고, 받은 목록을 DB 에 저장해둔다.
-    """
     cached = cache_load_universe(index_code)
     if cached:
         return cached
@@ -128,12 +118,6 @@ def ui_load_ranked_df(
     filter_config: dict,
     tickers_tuple: tuple[str, ...],
 ) -> tuple[pd.DataFrame, dict]:
-    """필터 + RS 랭킹을 한 번에 돌려 (ranked_df, stats) 반환.
-
-    Note:
-        `tickers_tuple` 은 캐시 키에 포함된다. 언더스코어 접두사를 쓰면
-        Streamlit cache_data 가 키에서 제외해 stale 데이터가 남는다.
-    """
     tickers = list(tickers_tuple)
     if not tickers:
         return pd.DataFrame(), {"total": 0, "final": 0}
@@ -141,7 +125,6 @@ def ui_load_ranked_df(
     df = screen_build_screening_df(tickers, lookback_days=20)
     filtered, stats = screen_apply_filters(df, filter_config)
 
-    # 7) RS 시간 정합성 — 종목 마지막일이 지수와 0일 초과 어긋나면 제외
     passing, lag_excluded = screen_filter_by_index_lag(
         filtered.index.tolist(), index_code, max_lag_days=0
     )
@@ -153,28 +136,23 @@ def ui_load_ranked_df(
 
     ranked = screen_rank_rs(passing, index_code, period=rs_period, top_n=top_n)
     if not ranked.empty:
-        meta_cols = filtered[["name_en", "name_kr", "avg_traded_value_20d", "market_cap", "caution_flags"]]
+        meta_cols = filtered[["name_en", "name_kr", "avg_traded_value_20d", "market_cap"]]
         ranked = ranked.merge(meta_cols, left_on="ticker", right_index=True, how="left")
     return ranked, stats
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def ui_load_chart_df(ticker: str, days: int) -> pd.DataFrame:
-    """차트용 시세 로드 (캐시). 티커 전환 쾌적용."""
     return cache_load_prices(ticker, days=days)
 
 
-# ─── 공통 헬퍼 ────────────────────────────────────────────────────────
+# ─── 공통 헬퍼 ──────────────────────────────────────────────────────
 
 def _index_display_name(index_code: str) -> str:
     return _INDEX_DISPLAY.get(index_code, index_code)
 
 
 def _sort_tickers_stale_first(tickers: list[str], normalize_upper: bool) -> list[str]:
-    """캐시 마지막일이 오래된(또는 캐시 없는) 티커가 앞으로 오도록 정렬.
-
-    `target = tickers[:limit]` 흐름에서 stale 한 종목이 먼저 갱신되도록 보장.
-    """
     last_dates = cache_get_all_last_price_dates()
 
     def key(t: str):
@@ -186,7 +164,6 @@ def _sort_tickers_stale_first(tickers: list[str], normalize_upper: bool) -> list
 
 
 def _get_index_period_info(index_code: str, rs_period: int) -> dict | None:
-    """지수 캐시에서 RS 산출 기준 정보(시작/종료 날짜·종가·변화율)."""
     df = cache_load_index(index_code, days=rs_period + 10)
     if df is None or df.empty or "Close" not in df.columns:
         return None
@@ -206,8 +183,193 @@ def _get_index_period_info(index_code: str, rs_period: int) -> dict | None:
     }
 
 
+# ─── ★ Step 3: 스파크라인 ───────────────────────────────────────────
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_spark_data(ticker: str, days: int = 22) -> list[float]:
+    """스파크라인용 정규화 종가 리스트 (0~1)."""
+    df = cache_load_prices(ticker, days=days)
+    if df is None or df.empty or "Close" not in df.columns:
+        return []
+    s = df["Close"].dropna().tail(days).tolist()
+    if len(s) < 3:
+        return []
+    lo, hi = min(s), max(s)
+    if hi == lo:
+        return [0.5] * len(s)
+    return [(v - lo) / (hi - lo) for v in s]
+
+
+def _spark_svg(values: list[float], up: bool, w: int = 90, h: int = 28) -> str:
+    """정규화 0~1 시계열을 inline SVG polyline 으로."""
+    if not values:
+        return (
+            f"<svg width='{w}' height='{h}' viewBox='0 0 {w} {h}'>"
+            f"<line x1='4' y1='{h//2}' x2='{w-4}' y2='{h//2}' "
+            f"stroke='#d1d6db' stroke-width='1' stroke-dasharray='3 3'/></svg>"
+        )
+    color = COLOR_PROFIT if up else COLOR_LOSS
+    n = len(values)
+    pts = " ".join(
+        f"{(i / (n - 1)) * (w - 4) + 2:.1f},{h - v * (h - 4) - 2:.1f}"
+        for i, v in enumerate(values)
+    )
+    last_x = w - 2
+    last_y = h - values[-1] * (h - 4) - 2
+    return (
+        f"<svg width='{w}' height='{h}' viewBox='0 0 {w} {h}' style='display:block;'>"
+        f"<polyline points='{pts}' fill='none' stroke='{color}' "
+        f"stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/>"
+        f"<circle cx='{last_x:.1f}' cy='{last_y:.1f}' r='2' fill='{color}'/>"
+        f"</svg>"
+    )
+
+
+# ─── ★ Step 2: 즐겨찾기 ─────────────────────────────────────────────
+
+def _ensure_favs(spec: dict) -> str:
+    """session_state 에 favorites set 보장하고 키 반환."""
+    key = _key(spec, "favs")
+    if key not in st.session_state:
+        st.session_state[key] = set()
+    return key
+
+
+def _make_fav_callback(spec: dict, ticker: str):
+    """별표 클릭 핸들러 — favorites set 토글."""
+    def _cb() -> None:
+        key = _ensure_favs(spec)
+        favs = st.session_state[key]
+        if ticker in favs:
+            favs.discard(ticker)
+        else:
+            favs.add(ticker)
+    return _cb
+
+
+def _apply_fav_filter(spec: dict, ranked: pd.DataFrame) -> pd.DataFrame:
+    """`only_fav` 토글이 켜져 있으면 favorites 만 남기고 rank 재계산."""
+    if not st.session_state.get(_key(spec, "only_fav"), False):
+        return ranked
+    favs = st.session_state.get(_key(spec, "favs"), set())
+    if not favs or ranked.empty:
+        return ranked.iloc[0:0]
+    filtered = ranked[ranked["ticker"].isin(favs)].copy().reset_index(drop=True)
+    filtered["rank"] = range(1, len(filtered) + 1)
+    return filtered
+
+
+def _render_fav_toggle_sidebar(spec: dict) -> None:
+    """사이드바 — '즐겨찾기만 보기' 토글 + 현재 즐겨찾기 개수."""
+    _ensure_favs(spec)
+    favs_count = len(st.session_state[_key(spec, "favs")])
+    st.toggle(
+        f"★ 즐겨찾기만 보기 ({favs_count})",
+        key=_key(spec, "only_fav"),
+        help="별표한 종목만 랭킹에 표시합니다.",
+    )
+
+
+# ─── ★ Step 1: 시장요약 카드 ────────────────────────────────────────
+
+def _stat_block(label: str, value, color: str, suffix: str = "") -> str:
+    """카드 내부 작은 통계 블록 HTML."""
+    return (
+        f"<div style='background:#f9fafb; border-radius:12px; padding:10px 12px;'>"
+        f"<div style='color:#8b95a1; font-size:11px; font-weight:500;'>{label}</div>"
+        f"<div style='font-family:\"JetBrains Mono\",ui-monospace,monospace; "
+        f"font-variant-numeric:tabular-nums; font-size:17px; font-weight:700; "
+        f"color:{color}; margin-top:2px;'>"
+        f"{value}"
+        f"<span style='color:#8b95a1; font-size:12px; font-weight:500; margin-left:3px;'>"
+        f"{suffix}</span>"
+        f"</div></div>"
+    )
+
+
+def _render_market_card(spec: dict, settings: tuple) -> None:
+    """자산군 시장요약 카드 — 지수 종가 + N일 수익률 + 상위 종목 통계."""
+    index_code, rs_period, top_n, filter_config = settings
+
+    info = _get_index_period_info(index_code, rs_period)
+    display = _index_display_name(index_code)
+
+    if info is None:
+        st.markdown(
+            f"<div style='background:#fff; border:1px solid #f1f3f5; border-radius:20px; "
+            f"padding:22px 24px; min-height:180px; display:flex; align-items:center; "
+            f"justify-content:center; color:#8b95a1; font-size:13px;'>"
+            f"{display} 지수 캐시가 부족합니다. 사이드바에서 새로고침 해주세요."
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    tickers = ui_load_index_tickers(index_code)
+    ranked, _stats = ui_load_ranked_df(
+        index_code=index_code,
+        rs_period=rs_period,
+        top_n=top_n,
+        filter_config=filter_config,
+        tickers_tuple=tuple(tickers),
+    )
+
+    if not ranked.empty and "return_n" in ranked.columns:
+        adv = int((ranked["return_n"] > 0).sum())
+        dec = int((ranked["return_n"] < 0).sum())
+        avg_rs = float(ranked["rs"].mean())
+    else:
+        adv = dec = 0
+        avg_rs = 0.0
+
+    flag = "🇺🇸" if spec["code"] == "us" else "🇰🇷"
+    up = info["return_pct"] >= 0
+    color = COLOR_PROFIT if up else COLOR_LOSS
+    sign = "+" if up else ""
+
+    st.markdown(
+        f"""
+        <div style='background:#fff; border:1px solid #f1f3f5; border-radius:20px;
+                    padding:22px 24px; box-shadow:0 1px 2px rgba(16,24,40,.04),
+                                                  0 2px 8px rgba(16,24,40,.04);'>
+          <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;'>
+            <div style='display:flex; align-items:center; gap:8px;'>
+              <span style='background:#f1f3f5; color:#4e5968; padding:4px 10px;
+                           border-radius:999px; font-size:12px; font-weight:600;'>
+                {flag} {spec['label']}
+              </span>
+              <span style='font-size:17px; font-weight:700; color:#191f28;'>{display}</span>
+            </div>
+            <span style='color:#8b95a1; font-size:12px;'>{info['end_date']}</span>
+          </div>
+          <div style='display:flex; align-items:flex-end; gap:14px; margin-bottom:18px;'>
+            <div style='font-family:"JetBrains Mono",ui-monospace,monospace;
+                        font-variant-numeric:tabular-nums;
+                        font-size:30px; font-weight:800; line-height:1.1; color:#191f28;'>
+              {info['end_close']:,.2f}
+            </div>
+            <div style='font-family:"JetBrains Mono",ui-monospace,monospace;
+                        font-variant-numeric:tabular-nums;
+                        color:{color}; font-size:16px; font-weight:700; padding-bottom:3px;'>
+              {sign}{info['return_pct']:.2f}%
+              <span style='color:#8b95a1; font-size:12px; font-weight:500; margin-left:4px;'>
+                · 최근 {rs_period}일
+              </span>
+            </div>
+          </div>
+          <div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;'>
+            {_stat_block(f'Top {top_n} 상승', adv, COLOR_PROFIT, '개')}
+            {_stat_block(f'Top {top_n} 하락', dec, COLOR_LOSS, '개')}
+            {_stat_block('평균 RS', f'{avg_rs:.2f}', '#191f28')}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
 # ─── 자산군 spec dict ───────────────────────────────────────────────
-# 통화/포맷/배치함수/필터 UI/키 prefix 등 자산군 차이를 한 곳에서 관리.
 
 _US_SPEC: dict[str, Any] = {
     "code": "us",
@@ -216,7 +378,6 @@ _US_SPEC: dict[str, Any] = {
     "key_prefix": "scr",
     "normalize_upper": True,
 
-    # 새로고침
     "refresh_data_label": "yfinance",
     "refresh_btn": "yfinance에서 내려받기",
     "refresh_btn_help": (
@@ -235,26 +396,21 @@ _US_SPEC: dict[str, Any] = {
         "경우 이 옵션으로 정합성 복구."
     ),
 
-    # 통화/포맷
     "currency": "$",
     "price_col_format": "$%.2f",
     "price_chart_fmt": lambda v: f"${v:,.2f}",
     "price_hover_fmt": "$%{y:,.2f}",
     "atr_fmt": lambda v: f"${v:,.2f}",
-    # LWC 차트 가격 포맷 (우측 가격축, 캔들/선 라벨)
     "chart_price_precision": 2,
     "chart_price_min_move": 0.01,
 
-    # 거래대금
     "dv_label": "거래대금(M$)",
     "dv_divisor": 1_000_000.0,
     "dv_col_format": "%.1f",
     "dv_metric_fmt": lambda v: f"${v:,.1f}M",
 
-    # 시총
     "show_market_cap_column": False,
 
-    # 필터 UI
     "min_price_label": "최소 주가 ($)",
     "min_price_default": 10.0,
     "min_price_max": 10_000.0,
@@ -282,7 +438,6 @@ _KR_SPEC: dict[str, Any] = {
     "key_prefix": "scr_kr",
     "normalize_upper": False,
 
-    # 새로고침
     "refresh_data_label": "FDR",
     "refresh_btn": "FDR에서 내려받기",
     "refresh_btn_help": (
@@ -300,26 +455,21 @@ _KR_SPEC: dict[str, Any] = {
         "historical 가격이 retroactively 재조정된 경우 정합성 복구용."
     ),
 
-    # 통화/포맷
     "currency": "₩",
     "price_col_format": "₩%,d",
     "price_chart_fmt": lambda v: f"₩{v:,.0f}",
     "price_hover_fmt": "₩%{y:,.0f}",
     "atr_fmt": lambda v: f"₩{v:,.0f}",
-    # LWC 차트 가격 포맷 — 한국 주식은 정수 (소수점 표기 안 함)
     "chart_price_precision": 0,
     "chart_price_min_move": 1.0,
 
-    # 거래대금
     "dv_label": "거래대금(억)",
     "dv_divisor": 100_000_000.0,
     "dv_col_format": "%,.0f",
     "dv_metric_fmt": lambda v: f"{v:,.0f}억",
 
-    # 시총 (한국 전용)
     "show_market_cap_column": True,
 
-    # 필터 UI
     "min_price_label": "최소 주가 (원)",
     "min_price_default": 1_000,
     "min_price_max": 10_000_000,
@@ -333,7 +483,6 @@ _KR_SPEC: dict[str, Any] = {
     "min_dv_summary_fmt": lambda raw: f"≥ {raw/100_000_000:,.0f}억",
     "min_price_summary_fmt": lambda v: f"≥ {v:,.0f}원",
 
-    # 한국 전용: 시총 필터 슬라이더
     "show_market_cap_filter": True,
     "min_marketcap_label": "최소 시가총액 (억 원)",
     "min_marketcap_default": 3_000,
@@ -351,14 +500,12 @@ _KR_SPEC: dict[str, Any] = {
 
 
 def _key(spec: dict, suffix: str) -> str:
-    """spec 별 session_state 키 생성 — `f"{prefix}_{suffix}"`."""
     return f"{spec['key_prefix']}_{suffix}"
 
 
-# ─── 사이드바 ────────────────────────────────────────────────────────
+# ─── 사이드바 ──────────────────────────────────────────────────────
 
 def _render_index_status_badge(index_code: str) -> None:
-    """사이드바 미니 배지: 지수 캐시 보유 여부."""
     idx_cache = cache_load_index(index_code, days=5)
     cached = idx_cache is not None and not idx_cache.empty
     color = "#1a9cff" if cached else "#ff9500"
@@ -400,10 +547,12 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
         )
         _render_index_status_badge(index_code)
 
-        # 데이터 새로고침 (백그라운드 스레드 — 미국/한국 독립 실행)
         _render_refresh_section(spec, index_code)
 
-        # 필터 설정
+        # ★ Step 2: 즐겨찾기 토글
+        st.divider()
+        _render_fav_toggle_sidebar(spec)
+
         st.divider()
         with st.expander("필터 설정", expanded=False):
             min_price = st.number_input(
@@ -465,11 +614,11 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
                     key=_key(spec, "filter_exclude_china"),
                 )
             exclude_risk = st.checkbox(
-                "관리·거래정지/정리매매 제외", value=True,
+                "관리/위험종목 제외", value=True,
                 key=_key(spec, "filter_exclude_risk"),
                 help=(
-                    "LS증권 데이터 기반 관리종목·거래정지·정리매매 종목을 제외합니다. "
-                    "투자경고/투자주의/단기과열은 제외하지 않고 참고 배지로만 표시합니다."
+                    "KRX 공시 기반 관리종목/투자주의/거래정지 제외. "
+                    "위험종목 데이터를 사이드바 새로고침에서 갱신해야 효과가 적용됩니다."
                     if spec["code"] == "kr" else None
                 ),
             )
@@ -489,15 +638,11 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
     return index_code, int(rs_period), int(top_n), filter_config
 
 
-# ─── 새로고침 (백그라운드 스레드) ───────────────────────────────────
-# 미국/한국 새로고침을 각각 별도 스레드로 돌려 서로 블로킹하지 않게 한다.
-# 스레드는 `job` dict 만 변형하고 Streamlit API 는 호출하지 않는다
-# (ScriptRunContext 불필요). 메인 스크립트는 fragment 로 job 을 폴링한다.
+# ─── 새로고침 (백그라운드 스레드) ─────────────────────────────────
 
 def _refresh_worker(
     spec: dict, index_code: str, target: list[str], force: bool, job: dict
 ) -> None:
-    """백그라운드 스레드 본체 — 지수/시세/메타 갱신 후 `job` 에 결과 기록."""
     try:
         job["phase"] = "지수 시세"
         idx_result = spec["refresh_index_fn"](index_code, days=300, force=force)
@@ -541,7 +686,6 @@ def _refresh_worker(
                 progress_cb=_meta_cb,
             )
         else:
-            # 한국 메타는 프로세스 캐시 활용, 순차 처리로 충분
             meta_result = spec["refresh_meta_fn"](target, ttl_days=7, force=force)
             job["meta_done"] = len(target)
         job["messages"].append(
@@ -550,13 +694,12 @@ def _refresh_worker(
             f"failed={len(meta_result['failed'])}"
         )
 
-        # 현재 유니버스에 없는 죽은 티커 시세 정리 (날짜 트리밍은 안 함)
         pruned = cache_prune_orphan_prices(vacuum=False)
         if pruned:
             job["messages"].append(f"정리: 죽은 티커 시세 {pruned:,}행 삭제")
 
         job["phase"] = "완료"
-    except Exception as e:  # 스레드 경계 — 예외를 job 에 담아 UI 로 전달
+    except Exception as e:
         job["error"] = str(e)
         job["phase"] = "실패"
     finally:
@@ -565,13 +708,11 @@ def _refresh_worker(
 
 
 def _start_refresh(spec: dict, index_code: str, force: bool) -> None:
-    """새로고침 백그라운드 스레드 시작. 이미 실행 중이면 무시."""
     job_key = _key(spec, "refresh_job")
     existing = st.session_state.get(job_key)
     if existing and existing.get("running"):
         return
 
-    # 새로고침은 최신 구성종목을 외부 소스에서 받아 universe 갱신 (편입/편출 반영)
     tickers = ui_refresh_index_universe(index_code)
     if not tickers:
         st.session_state[job_key] = {
@@ -611,7 +752,6 @@ def _start_refresh(spec: dict, index_code: str, force: bool) -> None:
 
 
 def _render_refresh_progress(spec: dict, job: dict) -> None:
-    """진행 중 새로고침의 실시간 진행바."""
     elapsed = int(time.time() - job.get("started_at", time.time()))
     st.caption(f"⏳ {job['phase']} 진행 중 … ({elapsed}초 경과)")
 
@@ -630,8 +770,6 @@ def _render_refresh_progress(spec: dict, job: dict) -> None:
 
 
 def _render_refresh_result(spec: dict, job: dict) -> None:
-    """완료/실패한 새로고침 결과 표시."""
-    # 완료 직후 1회만 랭킹/차트 캐시 무효화
     if not job.get("cache_cleared"):
         ui_load_ranked_df.clear()
         ui_load_chart_df.clear()
@@ -647,31 +785,18 @@ def _render_refresh_result(spec: dict, job: dict) -> None:
 
 @st.fragment(run_every=2)
 def _refresh_progress_fragment(spec: dict) -> None:
-    """진행 중 새로고침 폴링 fragment — Streamlit 이 2초마다 자동 재실행.
-
-    완료 감지 시 1회만 full rerun 으로 부모를 다시 렌더 → 부모가
-    `running=False` 이면 이 fragment 를 더는 호출하지 않으므로 Streamlit 이
-    run_every 타이머를 자연 해제한다.
-    """
     job = st.session_state.get(_key(spec, "refresh_job"))
     if not job:
         return
     if job.get("running"):
         _render_refresh_progress(spec, job)
         return
-    # 완료 — 결과는 부모가 직접 렌더하도록 1회만 full rerun
     if not job.get("ui_finalized"):
         job["ui_finalized"] = True
         st.rerun(scope="app")
 
 
 def _render_refresh_section(spec: dict, index_code: str) -> None:
-    """데이터 새로고침 UI — 버튼 + 진행상황.
-
-    미국/한국이 각각 자기 `job` 을 가지므로 서로 독립적으로 실행된다.
-    진행 중일 때만 polling fragment 를 호출하고, 끝나면 결과 함수를
-    직접 호출 → fragment 가 다음 풀-런에서 미렌더되어 타이머가 해제됨.
-    """
     st.divider()
     st.markdown("##### 데이터 새로고침")
 
@@ -706,7 +831,6 @@ def _render_refresh_section(spec: dict, index_code: str) -> None:
 def _render_rs_header(
     index_code: str, index_display: str, rs_period: int, top_n: int
 ) -> None:
-    """헤더: 'RS Top N' + 지수 N일 변화율/시작·종료 정보."""
     info = _get_index_period_info(index_code, rs_period)
     cols = st.columns([2, 1.4])
     with cols[0]:
@@ -731,7 +855,6 @@ def _render_rs_header(
 
 
 def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
-    """필터 축소 흐름 배지 — '전체 → 주가 → … → 상위 N'."""
     total = stats.get("total", 0)
     if total == 0:
         return
@@ -755,7 +878,6 @@ def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
     if lag_excluded:
         parts.append(f"지연 -{lag_excluded}")
     parts.append(f"상위 {ranked_len}")
-    # caption 의 폰트가 작아 한글이 흐릿하게 보이는 문제 → markdown 으로 키움.
     st.markdown(
         f"<div style='font-size:0.92rem; color:{COLOR_TEXT}; "
         f"margin-top:4px; margin-bottom:8px;'>"
@@ -766,7 +888,6 @@ def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
 
 
 def _render_filter_summary(spec: dict, cfg: dict) -> None:
-    """현재 필터 조건 한 줄 배지."""
     badges = [
         f"주가 {spec['min_price_summary_fmt'](cfg['min_price'])}",
         f"거래대금 {spec['min_dv_summary_fmt'](cfg['min_traded_value'])}",
@@ -781,9 +902,8 @@ def _render_filter_summary(spec: dict, cfg: dict) -> None:
     if spec["show_china_filter"] and cfg.get("exclude_china"):
         badges.append("중국 제외")
     if cfg.get("exclude_risk"):
-        suffix = "*" if spec["code"] == "kr" else ""  # 한국은 데이터 미적용 표시
+        suffix = "*" if spec["code"] == "kr" else ""
         badges.append(f"관리 제외{suffix}")
-    # caption 의 폰트가 작아 한글이 흐릿하게 보이는 문제 → markdown 으로 키움.
     st.markdown(
         f"<div style='font-size:0.92rem; color:{COLOR_TEXT}; "
         f"margin-top:4px; margin-bottom:2px;'>"
@@ -794,10 +914,9 @@ def _render_filter_summary(spec: dict, cfg: dict) -> None:
     )
 
 
-# ─── 랭킹 테이블 ─────────────────────────────────────────────────────
+# ─── 랭킹 테이블 ────────────────────────────────────────────────────
 
 def _make_pick_callback(spec: dict, ticker: str):
-    """행 셀 버튼 on_click 핸들러 — selected_ticker 를 즉시 세팅."""
     target_key = _key(spec, "selected_ticker")
 
     def _cb() -> None:
@@ -807,15 +926,11 @@ def _make_pick_callback(spec: dict, ticker: str):
 
 
 def _first_valid_name(*candidates: object) -> str:
-    """후보 중 첫 '유효한 종목명 문자열' 반환 (NaN/None/빈문자 건너뜀).
-
-    마지막 후보(보통 ticker)는 항상 문자열이라 폴백으로 안전하다.
-    """
     for c in candidates:
         if c is None:
             continue
         try:
-            if pd.isna(c):  # float NaN 등
+            if pd.isna(c):
                 continue
         except (TypeError, ValueError):
             pass
@@ -826,13 +941,6 @@ def _first_valid_name(*candidates: object) -> str:
 
 
 def _fmt_cell(value, fmt: str, na: str = "—") -> str:
-    """안전 포맷 — NaN/None 이면 na 반환.
-
-    fmt 은 ``%`` 스타일(`"%.3f"`, `"%+.2f%%"`, `"%,.0f"`) 또는 ``format()`` 스타일
-    (`",.0f"`) 모두 허용. Python 의 ``%`` 연산자는 thousands separator(`,`)를
-    지원하지 않으므로 자동으로 ``format()`` 스타일로 변환해 처리한다.
-    (수정 전: `"%,.0f" % 845.47` → ValueError → str() 폴백 → "845.4737865")
-    """
     if value is None:
         return na
     try:
@@ -841,14 +949,13 @@ def _fmt_cell(value, fmt: str, na: str = "—") -> str:
     except (TypeError, ValueError):
         pass
     if fmt.startswith("%"):
-        spec = fmt[1:]
-        # 끝에 리터럴 `%%` 가 붙어있으면 잘라내고 마지막에 다시 부착
+        spec_ = fmt[1:]
         suffix = ""
-        if spec.endswith("%%"):
-            spec = spec[:-2]
+        if spec_.endswith("%%"):
+            spec_ = spec_[:-2]
             suffix = "%"
         try:
-            return format(value, spec) + suffix
+            return format(value, spec_) + suffix
         except (TypeError, ValueError):
             pass
     try:
@@ -857,38 +964,13 @@ def _fmt_cell(value, fmt: str, na: str = "—") -> str:
         return str(value)
 
 
-_CAUTION_SHORT = {
-    "투자경고": "투경", "투자주의": "투주", "단기과열": "과열",
-    "관리": "관리", "거래정지": "정지", "정리매매": "정리",
-}
-
-
-def _caution_badge_md(caution_flags) -> str:
-    """caution_flags(콤마조인 문자열) → 버튼 라벨용 마크다운 색상 배지 문자열.
-
-    빈 값/NaN 이면 빈 문자열. UI 버튼 라벨이 마크다운이라 :orange[...] directive 사용.
-    """
-    if not isinstance(caution_flags, str) or not caution_flags.strip():
-        return ""
-    tags = [
-        f":orange[{_CAUTION_SHORT.get(x.strip(), x.strip())}]"
-        for x in caution_flags.split(",")
-        if x.strip()
-    ]
-    return " ".join(tags)
-
-
 def _render_ranking_table(
     spec: dict, ranked: pd.DataFrame, rs_period: int
 ) -> str | None:
-    """랭킹 테이블 — 각 셀이 투명 버튼이라 **행 어디든 클릭하면 차트가 열린다**.
-
-    정렬 기준은 테이블 위 st.pills 로 선택. 활성 컬럼 헤더에 ▼ 표시.
-    """
+    """랭킹 테이블 — 별표 컬럼 + 스파크라인 + 행 클릭으로 차트 픽."""
     if ranked.empty:
         return None
 
-    # 정렬 기준 pills — 테이블 위에 표시
     has_weighted = "rs_weighted" in ranked.columns and not ranked["rs_weighted"].isna().all()
     sort_options = ["RS", "RS가중"] if has_weighted else ["RS"]
     sort_choice = st.pills(
@@ -900,7 +982,6 @@ def _render_ranking_table(
     )
     sort_col = "rs_weighted" if sort_choice == "RS가중" else "rs"
 
-    # 선택된 정렬 기준으로 재정렬 + 순위 재계산
     ranked = (
         ranked
         .sort_values(sort_col, ascending=False, na_position="last", kind="mergesort")
@@ -909,12 +990,25 @@ def _render_ranking_table(
     )
     ranked["rank"] = range(1, len(ranked) + 1)
 
-    # (헤더 라벨, 컬럼 비율)
+    # ★ Step 2: 즐겨찾기 필터
+    ranked = _apply_fav_filter(spec, ranked)
+    if ranked.empty:
+        st.info(
+            "★ 즐겨찾기한 종목이 아직 없어요. "
+            "랭킹에서 ☆ 을 눌러 추가해보세요."
+        )
+        return st.session_state.get(_key(spec, "selected_ticker"))
+
+    favs_set = st.session_state.get(_key(spec, "favs"), set())
+
+    # 컬럼 — ★(0), 순위, 코드, 종목명, 현재가, 추이(5), RS, RS가중, 수익률, [시총], 거래대금
     columns: list[tuple[str, float]] = [
+        ("★", 0.35),
         ("순위", 0.45),
         (spec["ticker_col_label"], 0.75),
         ("종목명", 2.2),
         ("현재가", 1.1),
+        ("추이", 0.9),
         ("RS", 0.7),
         ("RS가중", 0.85),
         (f"{rs_period}일 수익률", 1.15),
@@ -927,12 +1021,22 @@ def _render_ranking_table(
     container_key = f"scr_rank_table_{spec['code']}"
 
     with st.container(key=container_key):
-        # 헤더 — 활성 정렬 컬럼 강조
+        # 헤더
         header_cols = st.columns(widths, gap="small")
         for i, (label, _) in enumerate(columns):
-            align = "left" if i in (1, 2) else "right"
-            is_active = (sort_col == "rs" and label == "RS") or (sort_col == "rs_weighted" and label == "RS가중")
-            style = f"text-align:{align}; {'color:#1a1a1a; font-weight:700;' if is_active else ''}"
+            if i in (0, 5):
+                align = "center"
+            elif i in (2, 3):
+                align = "left"
+            else:
+                align = "right"
+            is_active = (
+                (sort_col == "rs" and label == "RS")
+                or (sort_col == "rs_weighted" and label == "RS가중")
+            )
+            style = f"text-align:{align};"
+            if is_active:
+                style += "color:#191f28; font-weight:700;"
             text = f"{label} ▼" if is_active else label
             header_cols[i].markdown(
                 f"<div class='scr-rank-header' style='{style}'>{text}</div>",
@@ -940,45 +1044,71 @@ def _render_ranking_table(
             )
 
         # 데이터 행
-        for row_pos, row in enumerate(ranked.itertuples(index=False)):
+        for row in ranked.itertuples(index=False):
             r = row._asdict()
             ticker = str(r["ticker"])
-            # 메타 미보유 종목은 name_kr/name_en 이 NaN(float)으로 들어온다.
-            # NaN 은 truthy 라 `a or b or c` 로 거르면 NaN 이 그대로 새어나가
-            # 버튼 라벨(문자열 필수)에서 TypeError 가 난다 → 명시적으로 검사.
             name_raw = _first_valid_name(r.get("name_kr"), r.get("name_en"), ticker)
             below_ma5 = bool(r.get("below_ma5", False))
             name_display = f"{name_raw} :red[(이탈)]" if below_ma5 else name_raw
-            _badge = _caution_badge_md(r.get("caution_flags"))
-            if _badge:
-                name_display = f"{name_display} {_badge}"
 
             rs_w = r.get("rs_weighted")
-            cells: list[str] = [
+            return_n = r.get("return_n", 0) or 0
+            up = return_n >= 0
+
+            # 데이터 셀 — ★(0)와 추이(5) 제외한 컬럼들
+            data_cells: list[str] = [
                 str(int(r["rank"])),
                 ticker,
                 name_display,
                 spec["price_chart_fmt"](r["last_price"]),
                 _fmt_cell(r.get("rs"), "%.3f"),
                 _fmt_cell(rs_w, "%.3f") if pd.notna(rs_w) else "—",
-                _fmt_cell(r.get("return_n", 0) * 100.0, "%+.2f%%"),
+                _fmt_cell(return_n * 100.0, "%+.2f%%"),
             ]
             if spec["show_market_cap_column"] and "market_cap" in ranked.columns:
                 mc = r.get("market_cap")
-                mc_disp = _fmt_cell(mc / 1e8 if pd.notna(mc) else None, "%,.0f")
-                cells.append(mc_disp)
+                data_cells.append(
+                    _fmt_cell(mc / 1e8 if pd.notna(mc) else None, "%,.0f")
+                )
             dv = r.get("avg_traded_value_20d")
-            dv_disp = _fmt_cell(
+            data_cells.append(_fmt_cell(
                 dv / spec["dv_divisor"] if pd.notna(dv) else None,
                 spec["dv_col_format"],
-            )
-            cells.append(dv_disp)
+            ))
 
             row_cols = st.columns(widths, gap="small")
+
+            # 0: 별표 토글
+            is_fav = ticker in favs_set
+            row_cols[0].button(
+                "★" if is_fav else "☆",
+                key=f"scr_rank_star_{spec['code']}_{ticker}",
+                on_click=_make_fav_callback(spec, ticker),
+                use_container_width=True,
+            )
+
+            # 1~4: 순위, 코드, 종목명, 현재가 (차트 픽)
             cb = _make_pick_callback(spec, ticker)
-            for c_idx, cell_text in enumerate(cells):
+            for c_idx in (1, 2, 3, 4):
                 row_cols[c_idx].button(
-                    cell_text,
+                    data_cells[c_idx - 1],
+                    key=f"scr_rank_cell_{spec['code']}_{ticker}_{c_idx}",
+                    on_click=cb,
+                    use_container_width=True,
+                )
+
+            # 5: 스파크라인 (SVG, 시각만)
+            tick_norm = ticker.upper() if spec["normalize_upper"] else ticker
+            spark = _load_spark_data(tick_norm, days=22)
+            row_cols[5].markdown(
+                f"<div class='scr-rank-spark'>{_spark_svg(spark, up=up)}</div>",
+                unsafe_allow_html=True,
+            )
+
+            # 6~끝: 나머지 데이터 셀
+            for c_idx in range(6, len(widths)):
+                row_cols[c_idx].button(
+                    data_cells[c_idx - 2],
                     key=f"scr_rank_cell_{spec['code']}_{ticker}_{c_idx}",
                     on_click=cb,
                     use_container_width=True,
@@ -987,11 +1117,9 @@ def _render_ranking_table(
     return st.session_state.get(_key(spec, "selected_ticker"))
 
 
-# ─── 차트 패널 ───────────────────────────────────────────────────────
+# ─── 차트 패널 ──────────────────────────────────────────────────────
 
 def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
-    """선택된 티커의 캔들 + MA5/MA20/MA60 + 9ATR 패널 (TradingView lightweight-charts)."""
-    # MA60 까지 그리려면 view 시작점 직전 60일 + 안전 버퍼 필요
     df = ui_load_chart_df(ticker, days=lookback_days + 70)
 
     if df is None or len(df) < 15:
@@ -1011,7 +1139,6 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
     last_close = float(df_view["Close"].iloc[-1])
     last_date = df_view.index[-1].strftime("%Y-%m-%d")
 
-    # 이평선 색상 범례 (좌상단) — 색칩 + 기간 라벨
     legend = "".join(
         f"<span style='display:inline-flex; align-items:center; "
         f"margin-right:12px;'>"
@@ -1035,9 +1162,6 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
         unsafe_allow_html=True,
     )
 
-    # LWC 는 time 을 UNIX 초로 변환하며 naive datetime 은 서버 로컬 타임존으로
-    # 해석한다 (로컬 KST vs 클라우드 UTC 에서 날짜가 어긋남). UTC 자정으로 고정해
-    # 어느 환경에서나 동일한 날짜로 표시되게 한다.
     view_times = df_view.index.tz_localize("UTC")
 
     candle_df = pd.DataFrame({
@@ -1047,13 +1171,10 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
         "low": df_view["Low"].values,
         "close": df_view["Close"].values,
     }).dropna()
-    # LWC 는 open/close 가 high/low 범위 밖이면 ValueValidationError 를 던진다.
-    # FDR 한국 데이터에서 가끔 발생 — high/low 만 OHLC 4값 max/min 으로 보정 (open/close 보존).
     ohlc = candle_df[["open", "high", "low", "close"]]
     candle_df["high"] = ohlc.max(axis=1)
     candle_df["low"] = ohlc.min(axis=1)
 
-    # 가격 포맷: 한국은 정수, 미국은 소수점 2자리
     price_precision = int(spec.get("chart_price_precision", 2))
     price_min_move = float(spec.get("chart_price_min_move", 0.01))
     price_fmt_opts = PriceFormatOptions(
@@ -1095,7 +1216,6 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
             ls.price_format = price_fmt
         return ls
 
-    # ATR 패널도 통화에 맞춰 포맷 — 한국은 정수, 미국은 소수점 2자리
     atr_fmt_opts = PriceFormatOptions(
         type="price", precision=price_precision, min_move=price_min_move,
     )
@@ -1112,32 +1232,26 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
         height=620,
         layout=LayoutOptions(
             text_color=COLOR_TEXT,
-            # 기본 11 → 13: x/y축 라벨이 너무 작아 보이는 문제 해결
             font_size=13,
             font_family=(
                 "Pretendard, -apple-system, BlinkMacSystemFont, "
                 "'Segoe UI', Roboto, sans-serif"
             ),
-            # 가격(0) : ATR(1) ≈ 3 : 1
             pane_heights={
                 0: PaneHeightOptions(factor=3.0),
                 1: PaneHeightOptions(factor=1.0),
             },
         ),
-        # 일봉이라 시각(00:00) 표시 불필요 — 기본 time_visible=True 면 축/크로스헤어에
-        # "00:00" 가 붙어 날짜만 보이지 않는 문제. 날짜만 표시하도록 끈다.
         time_scale=TimeScaleOptions(time_visible=False, seconds_visible=False),
     )
 
     chart = Chart(series=series, options=chart_opts)
-    # 티커 전환 시 key 가 달라야 LWC 가 새 차트로 재마운트
     chart.render(key=f"lwc_chart_{spec['code']}_{ticker}")
 
     _render_chart_metrics(spec, df, atr9)
 
 
 def _render_chart_metrics(spec: dict, df: pd.DataFrame, atr9: pd.Series) -> None:
-    """차트 하단 3칸 메트릭: ATR, 5일 수익률, 20일 평균 거래대금."""
     last_close = float(df["Close"].iloc[-1])
 
     atr_last = atr9.dropna()
@@ -1169,14 +1283,9 @@ def _render_chart_metrics(spec: dict, df: pd.DataFrame, atr9: pd.Series) -> None
     c3.metric("거래대금(20D 평균)", dv_display)
 
 
-# ─── 섹션 엔트리 ─────────────────────────────────────────────────────
+# ─── 섹션 엔트리 ────────────────────────────────────────────────────
 
 def _render_screening_section(spec: dict, settings: tuple) -> None:
-    """자산군 스크리닝 섹션 — 좌측 랭킹 + 우측 차트.
-
-    사이드바는 `_render_sidebar` 가 별도로 그리며, 그 반환값을
-    `settings` 로 받아 본문만 렌더한다.
-    """
     index_code, rs_period, top_n, filter_config = settings
 
     tickers = ui_load_index_tickers(index_code)
@@ -1200,7 +1309,6 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
         _render_filter_summary(spec, filter_config)
         _render_pipeline_badge(stats, len(ranked))
 
-        # 빈 상태 분기
         if stats.get("total", 0) == 0 or not tickers:
             st.warning(
                 f"**{index_display}** 구성종목 데이터가 캐시에 없습니다. "
@@ -1266,7 +1374,6 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
 # ─── 퍼블릭 엔트리 ─────────────────────────────────────────────────
 
 def _render_remote_sync_badge() -> None:
-    """사이드바 상단 — 자동 갱신(원격 캐시) 마지막 동기화 정보."""
     info = get_last_sync_info()
 
     if info is None:
@@ -1277,7 +1384,6 @@ def _render_remote_sync_badge() -> None:
             unsafe_allow_html=True,
         )
     else:
-        # status → 색상/문구
         if info.status == "synced":
             color, label = COLOR_PROFIT, "방금 동기화"
         elif info.status == "up_to_date":
@@ -1316,7 +1422,7 @@ def _render_remote_sync_badge() -> None:
             st.success(
                 f"동기화 완료 ({result.status}) — {result.remote_kst or result.remote_stamp}"
             )
-            st.cache_data.clear()  # 랭킹 캐시도 재계산
+            st.cache_data.clear()
         elif result.status == "no_remote":
             st.warning("원격에 캐시가 아직 없습니다. (Actions 첫 실행 대기 중)")
         else:
@@ -1326,7 +1432,7 @@ def _render_remote_sync_badge() -> None:
 def render_screening_page() -> None:
     """미국주식 + 한국주식을 한 화면에 표시 (위: 미국, 아래: 한국).
 
-    사이드바에는 두 자산군의 설정이 위아래로 함께 나열된다.
+    상단에 시장 요약 카드 2개 (US + KR) 가 함께 표시된다.
     """
     with st.sidebar:
         st.markdown("#### 주식 스크리닝")
@@ -1337,6 +1443,15 @@ def render_screening_page() -> None:
     with st.sidebar:
         st.divider()
     kr_settings = _render_sidebar(_KR_SPEC)
+
+    # ★ Step 1: 시장 요약 카드 (US + KR 나란히)
+    st.markdown("### 📊 오늘의 시장")
+    sum_cols = st.columns(2, gap="large")
+    with sum_cols[0]:
+        _render_market_card(_US_SPEC, us_settings)
+    with sum_cols[1]:
+        _render_market_card(_KR_SPEC, kr_settings)
+    st.write("")
 
     st.markdown("## 미국주식")
     _render_screening_section(_US_SPEC, us_settings)

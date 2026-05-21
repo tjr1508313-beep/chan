@@ -91,6 +91,13 @@
 - **미국주식 데이터 API** — yfinance 등 외부 데이터 소스 연동 전담
 - **한국주식 데이터 API** — FinanceDataReader 연동 전담
 
+## 배포 환경 (중요 — 반드시 숙지)
+- **이 앱은 Streamlit Cloud로 서비스 중** — 사용자가 보는 웹사이트는 GitHub 레포 `main` 브랜치를 직접 읽음
+- **로컬 파일 수정만으로는 사이트에 반영 안 됨** → 반드시 GitHub에 push해야 Streamlit Cloud가 자동 재배포
+- **작업 완료 후 반드시**: `git commit` → `git push origin main` (또는 브랜치 → 머지 → push)
+- 브랜치 사용은 OK, 단 **완료 시 main에 머지 + push까지** 해야 웹사이트에 반영됨
+- `.bak` 파일, `_apply/` 폴더, `screening_cache.db*` 등 임시/캐시 파일은 커밋하지 말 것
+
 ## 작업 규칙
 - **작업이 끝난 후 변경사항이 생기면** (기능 추가, 파일 추가, DB 변경, 필터 조건 변경 등) **이 파일을 자동으로 업데이트할 것**
 - **에이전트 역할/담당 범위가 바뀌면** `.claude/agents/` 관련 파일도 업데이트할 것
