@@ -19,6 +19,7 @@ from typing import Callable, Iterable
 
 from . import cache
 from . import data_kr as kr_data
+from . import kr_risk
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +163,21 @@ def screen_refresh_meta_kr(
             failed.append(t)
 
     return {"updated": updated, "skipped": skipped, "failed": failed}
+
+
+def screen_refresh_risk_kr() -> dict:
+    """LS OpenAPI 로 관리/거래정지/시장경보 플래그를 갱신 (메타 TTL 무관, 매 실행).
+
+    메타 갱신 *이후* 호출해야 한다 (cache_save_meta 가 caution_flags 를 NULL 로
+    덮으므로). LS 키 미설정/실패 시 flags 가 빈 dict → 전체 클리어로 기존 플래그가
+    날아가지 않도록 갱신을 건너뛴다.
+    """
+    cache.init_cache()
+    flags = kr_risk.kr_fetch_risk_flags()
+    if not flags:
+        return {"updated": 0, "skipped": True}
+    cache.update_risk_flags(flags)
+    return {"updated": len(flags), "skipped": False}
 
 
 # ---------------------------------------------------------------------------

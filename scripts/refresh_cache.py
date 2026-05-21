@@ -3,7 +3,7 @@
 Streamlit 없이 `screening/batch*.py` 의 갱신 함수를 호출해
 `screening_cache.db` 를 업데이트한다.
 
-대상: **지수 + 시세만** (메타는 의도적으로 제외 — 사용자 결정).
+대상: **지수 + 시세 + 메타데이터** (메타는 TTL 7일 기반 증분 — 보통 일주일에 한 번만 실제 외부 호출).
 
 사용법:
     python -m scripts.refresh_cache --market us
@@ -66,8 +66,8 @@ def _refresh_us() -> dict:
 
 
 def _refresh_kr() -> dict:
-    """한국주식 지수(KS11, KQ11) + 코스피·코스닥 시세 갱신."""
-    out: dict = {"market": "kr", "indexes": {}, "prices": {}}
+    """한국주식 지수(KS11, KQ11) + 코스피·코스닥 시세 + 메타데이터 갱신."""
+    out: dict = {"market": "kr", "indexes": {}, "prices": {}, "meta": {}}
 
     for code in ("KS11", "KQ11"):
         out["indexes"][code] = batch_kr.screen_refresh_index_kr(
@@ -86,6 +86,8 @@ def _refresh_kr() -> dict:
     )
     # 메타(market_cap 등) — FDR StockListing 한 번 호출로 전종목 처리, 빠름
     out["meta"] = batch_kr.screen_refresh_meta_kr(tickers, ttl_days=7, force=False)
+    # 관리/거래정지/시장경보 플래그 — 메타 갱신 *후* (caution_flags 복원), 매 실행
+    out["risk"] = batch_kr.screen_refresh_risk_kr()
     # 현재 유니버스에 없는 죽은 티커 정리 + VACUUM (push 할 DB 를 작게 유지)
     out["pruned"] = cache.cache_prune_orphan_prices(vacuum=True)
     return out
@@ -119,13 +121,22 @@ def _summarize(report: dict, elapsed_s: float) -> tuple[str, bool]:
         parts.append(f"분할재요청 {fr}")
     if idx_fails:
         parts.append(f"지수실패={','.join(idx_fails)}")
+
+    meta = report.get("meta", {})
+    meta_result = meta.get("result", {}) if isinstance(meta, dict) else {}
+    if meta_result:
+        m_up = int(meta_result.get("updated", 0))
+        m_skip = int(meta_result.get("skipped", 0))
+        m_fail = len(meta_result.get("failed", []) or [])
+        parts.append(f"메타 {m_up}↑ {m_skip}= {m_fail}✗")
+
     parts.append(f"{elapsed_s:.0f}초")
     return " ".join(parts), threshold_exceeded
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="screening_cache.db 헤드리스 갱신 (지수+시세, 메타 제외)"
+        description="screening_cache.db 헤드리스 갱신 (지수+시세+메타, TTL 7일 증분)"
     )
     parser.add_argument("--market", choices=("us", "kr"), required=True)
     parser.add_argument(

@@ -72,6 +72,7 @@ _SCREEN_DF_COLUMNS = [
     "market_cap",
     "is_china",
     "is_risk",
+    "caution_flags",
     "name_en",
     "name_kr",
     "sector",
@@ -259,6 +260,7 @@ def screen_build_screening_df(
                 "market_cap": market_cap,
                 "is_china": is_china,
                 "is_risk": is_risk,
+                "caution_flags": meta.get("caution_flags"),
                 "name_en": meta.get("name_en"),
                 "name_kr": meta.get("name_kr"),
                 "sector": meta.get("sector"),
@@ -393,6 +395,8 @@ def _calc_weighted_rs(close: pd.Series) -> float:
 
     RS = (C/C63)×0.4 + (C/C126)×0.2 + (C/C189)×0.2 + (C/C252)×0.2
 
+    지수 대비 비율이 아닌 **절대 가격 비율** 합산 — 지수 수익률이 필요 없으므로
+    단독으로 종목 중장기 모멘텀을 나타낸다.
     252영업일(+1) 미만 종목은 NaN 처리.
     """
     s = close.dropna()

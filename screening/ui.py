@@ -153,7 +153,7 @@ def ui_load_ranked_df(
 
     ranked = screen_rank_rs(passing, index_code, period=rs_period, top_n=top_n)
     if not ranked.empty:
-        meta_cols = filtered[["name_en", "name_kr", "avg_traded_value_20d", "market_cap"]]
+        meta_cols = filtered[["name_en", "name_kr", "avg_traded_value_20d", "market_cap", "caution_flags"]]
         ranked = ranked.merge(meta_cols, left_on="ticker", right_index=True, how="left")
     return ranked, stats
 
@@ -465,11 +465,11 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
                     key=_key(spec, "filter_exclude_china"),
                 )
             exclude_risk = st.checkbox(
-                "관리/위험종목 제외", value=True,
+                "관리·거래정지/정리매매 제외", value=True,
                 key=_key(spec, "filter_exclude_risk"),
                 help=(
-                    "KRX 공시 기반 관리종목/투자주의/거래정지 제외. "
-                    "위험종목 데이터를 사이드바 새로고침에서 갱신해야 효과가 적용됩니다."
+                    "LS증권 데이터 기반 관리종목·거래정지·정리매매 종목을 제외합니다. "
+                    "투자경고/투자주의/단기과열은 제외하지 않고 참고 배지로만 표시합니다."
                     if spec["code"] == "kr" else None
                 ),
             )
@@ -842,6 +842,7 @@ def _fmt_cell(value, fmt: str, na: str = "—") -> str:
         pass
     if fmt.startswith("%"):
         spec = fmt[1:]
+        # 끝에 리터럴 `%%` 가 붙어있으면 잘라내고 마지막에 다시 부착
         suffix = ""
         if spec.endswith("%%"):
             spec = spec[:-2]
@@ -856,14 +857,33 @@ def _fmt_cell(value, fmt: str, na: str = "—") -> str:
         return str(value)
 
 
+_CAUTION_SHORT = {
+    "투자경고": "투경", "투자주의": "투주", "단기과열": "과열",
+    "관리": "관리", "거래정지": "정지", "정리매매": "정리",
+}
+
+
+def _caution_badge_md(caution_flags) -> str:
+    """caution_flags(콤마조인 문자열) → 버튼 라벨용 마크다운 색상 배지 문자열.
+
+    빈 값/NaN 이면 빈 문자열. UI 버튼 라벨이 마크다운이라 :orange[...] directive 사용.
+    """
+    if not isinstance(caution_flags, str) or not caution_flags.strip():
+        return ""
+    tags = [
+        f":orange[{_CAUTION_SHORT.get(x.strip(), x.strip())}]"
+        for x in caution_flags.split(",")
+        if x.strip()
+    ]
+    return " ".join(tags)
+
+
 def _render_ranking_table(
     spec: dict, ranked: pd.DataFrame, rs_period: int
 ) -> str | None:
     """랭킹 테이블 — 각 셀이 투명 버튼이라 **행 어디든 클릭하면 차트가 열린다**.
 
-    RS / RS가중 헤더는 클릭 가능한 정렬 버튼. `scr_{code}_sort_col` 세션 스테이트로
-    현재 정렬 기준을 관리한다. 헤더 버튼은 데이터 셀과 CSS 충돌 방지를 위해
-    별도 container(`scr_rank_header_*`)에 분리.
+    정렬 기준은 테이블 위 st.pills 로 선택. 활성 컬럼 헤더에 ▼ 표시.
     """
     if ranked.empty:
         return None
@@ -907,11 +927,10 @@ def _render_ranking_table(
     container_key = f"scr_rank_table_{spec['code']}"
 
     with st.container(key=container_key):
-        # 헤더
+        # 헤더 — 활성 정렬 컬럼 강조
         header_cols = st.columns(widths, gap="small")
         for i, (label, _) in enumerate(columns):
             align = "left" if i in (1, 2) else "right"
-            # 활성 정렬 컬럼 강조
             is_active = (sort_col == "rs" and label == "RS") or (sort_col == "rs_weighted" and label == "RS가중")
             style = f"text-align:{align}; {'color:#1a1a1a; font-weight:700;' if is_active else ''}"
             text = f"{label} ▼" if is_active else label
@@ -930,6 +949,9 @@ def _render_ranking_table(
             name_raw = _first_valid_name(r.get("name_kr"), r.get("name_en"), ticker)
             below_ma5 = bool(r.get("below_ma5", False))
             name_display = f"{name_raw} :red[(이탈)]" if below_ma5 else name_raw
+            _badge = _caution_badge_md(r.get("caution_flags"))
+            if _badge:
+                name_display = f"{name_display} {_badge}"
 
             rs_w = r.get("rs_weighted")
             cells: list[str] = [

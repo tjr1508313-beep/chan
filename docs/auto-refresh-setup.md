@@ -142,6 +142,35 @@ A 와 B 둘 다 설정돼 있으면 **B(환경변수) 가 우선**.
 GitHub Settings → Personal access tokens → 해당 토큰 `Revoke` 1초.
 권한이 `Contents: Read-only` 뿐이므로 다른 데이터엔 영향 0.
 
+## LS증권 OpenAPI 키 (한국 관리종목 필터)
+
+한국 관리종목·거래정지·정리매매 자동 제외를 위해 LS증권 REST OpenAPI 를 사용한다.
+
+### 키 발급
+
+1. LS증권 계좌 개설 후 OpenAPI 앱 등록 → **조회전용(주문권한 없음)** App Key/Secret 발급
+   - 조회전용이라 유출돼도 시세 조회만 가능 (주문/이체 불가)
+
+### 로컬 세팅
+
+`.streamlit/secrets.toml`:
+
+```toml
+ls_app_key = "발급받은_APP_KEY"
+ls_app_secret = "발급받은_APP_SECRET"
+```
+
+또는 환경변수 `LS_APP_KEY` / `LS_APP_SECRET`.
+
+### GitHub Actions (클라우드 캐시도 관리종목 반영)
+
+레포 `Settings → Secrets and variables → Actions` 에 추가:
+
+- `LS_APP_KEY`
+- `LS_APP_SECRET`
+
+키 미설정 시 관리종목 플래그만 비고, 나머지 갱신은 정상 동작한다 (graceful degrade).
+
 ## 문제 진단
 
 - **앱 사이드바에 "원격 캐시 없음"** → `data-cache` 브랜치가 아직 안 만들어짐.

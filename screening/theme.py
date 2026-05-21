@@ -257,6 +257,37 @@ div.st-key-scr_rank_table_kr {{
     text-overflow: ellipsis;
 }}
 
+/* 정렬 헤더 버튼 (RS / RS가중 클릭 정렬) */
+div.st-key-scr_rank_header_us .stButton > button,
+div.st-key-scr_rank_header_kr .stButton > button {{
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px solid {COLOR_BORDER} !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 10px 8px 6px !important;
+    color: {COLOR_MUTED} !important;
+    font-weight: 600 !important;
+    font-size: 0.82rem !important;
+    min-height: unset !important;
+    width: 100%;
+    white-space: nowrap;
+    justify-content: flex-end !important;
+}}
+div.st-key-scr_rank_header_us .stButton > button:hover,
+div.st-key-scr_rank_header_kr .stButton > button:hover {{
+    color: {COLOR_TEXT} !important;
+    background: transparent !important;
+}}
+div.st-key-scr_rank_header_us .stButton > button > div,
+div.st-key-scr_rank_header_kr .stButton > button > div,
+div.st-key-scr_rank_header_us .stButton > button p,
+div.st-key-scr_rank_header_kr .stButton > button p {{
+    justify-content: flex-end !important;
+    text-align: right !important;
+    width: 100%;
+}}
+
 /* 데이터 셀 = 투명 버튼 (행 어디든 클릭하면 차트 열림) */
 div.st-key-scr_rank_table_us .stButton > button,
 div.st-key-scr_rank_table_kr .stButton > button {{
