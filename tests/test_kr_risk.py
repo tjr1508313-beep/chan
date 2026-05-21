@@ -29,8 +29,9 @@ def test_fetch_returns_empty_without_keys(monkeypatch):
 def test_fetch_returns_empty_on_api_error(monkeypatch):
     monkeypatch.setenv("LS_APP_KEY", "k")
     monkeypatch.setenv("LS_APP_SECRET", "s")
+    monkeypatch.setattr(kr_risk, "_get_token", lambda *a, **k: "dummy-token")
 
-    def boom():
+    def boom(token):
         raise RuntimeError("network down")
 
     monkeypatch.setattr(kr_risk, "_collect_raw_designations", boom)
