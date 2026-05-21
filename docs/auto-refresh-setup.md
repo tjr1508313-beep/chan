@@ -64,9 +64,80 @@ git checkout main
 | `refresh-kr.yml` | `40 6 * * 1-5` | 평일 15:40 |
 | `refresh-us.yml` | `0 22 * * 0-4` | 평일 07:00 (UTC 일~목 = KST 월~금) |
 
-> ⚠️ GitHub Actions cron 은 정확한 시각 보장 X — 최대 ~15 분 지연 가능. 시세는
-> 그 정도 늦게 받아도 무방하지만, 더 빨리 받고 싶으면 cron 을 앞당기지 말고
-> Actions 탭에서 수동 트리거.
+> ⚠️ GitHub Actions cron 은 정확한 시각 보장 X — 수 시간 지연되거나 하루 통째로
+> 누락되는 경우가 있음. 아래 **외부 cron 트리거 세팅**을 권장.
+
+---
+
+## 외부 cron 트리거 (권장) — cron-job.org
+
+GitHub Actions 스케줄러는 무료/공개 레포에서 수 시간 지연 또는 하루 누락이
+빈번하다. `cron-job.org` (무료) 에서 GitHub API 를 직접 호출해 `workflow_dispatch`
+로 트리거하면 훨씬 안정적.
+
+워크플로에 이미 `workflow_dispatch` 가 설정돼 있으므로 **워크플로 파일 수정 불필요**.
+
+### 1단계 — PAT 발급 (workflow 권한)
+
+기존 `SCREENING_CACHE_TOKEN` 은 `Contents: read-only` 라 워크플로 트리거 불가.
+**별도** PAT 를 새로 발급:
+
+1. https://github.com/settings/personal-access-tokens/new 열기
+2. **Token name**: `screening-trigger` (식별용)
+3. **Expiration**: 1년
+4. **Repository access**: `Only select repositories` → `tjr1508313-beep/chan`
+5. **Repository permissions** → `Actions` 항목 → **`Read and write`**
+   (이것만 설정, 나머지 `No access`)
+6. `Generate token` → 토큰 즉시 복사 (`github_pat_...`)
+
+### 2단계 — cron-job.org 가입 & 잡 등록
+
+1. https://console.cron-job.org 에서 무료 가입 (이메일만 있으면 됨)
+2. 상단 `CREATE CRONJOB` 클릭
+
+#### KR 잡 설정
+
+| 항목 | 값 |
+|---|---|
+| **Title** | `Refresh KR cache` |
+| **URL** | `https://api.github.com/repos/tjr1508313-beep/chan/actions/workflows/refresh-kr.yml/dispatches` |
+| **Execution schedule** | `Custom` → 아래 cron 표현식 직접 입력 |
+| **cron 표현식** | `45 6 * * 1-5` (UTC 06:45, KST 15:45 — 월~금) |
+| **Request method** | `POST` |
+| **Request body** | `{"ref":"main"}` |
+
+`Advanced` 탭 → `Request headers` 에 아래 두 항목 추가:
+
+```
+Authorization: Bearer github_pat_여기에_붙여넣기
+Accept: application/vnd.github+json
+Content-Type: application/json
+```
+
+`CREATE` 버튼으로 저장.
+
+#### US 잡 설정 (필요 시)
+
+| 항목 | 값 |
+|---|---|
+| **Title** | `Refresh US cache` |
+| **URL** | `https://api.github.com/repos/tjr1508313-beep/chan/actions/workflows/refresh-us.yml/dispatches` |
+| **cron 표현식** | `5 22 * * 0-4` (UTC 22:05, KST 07:05 — UTC 일~목) |
+| **Request method / headers / body** | KR 잡과 동일 |
+
+### 3단계 — 동작 확인
+
+저장 직후 cron-job.org 대시보드에서 **`Run now`** 버튼 → GitHub Actions 탭에
+`workflow_dispatch` 트리거 실행이 뜨면 정상.
+
+> **기존 GitHub Actions cron 은 그대로 유지** — cron-job.org 가 실패해도
+> GitHub 스케줄러가 백업으로 동작. 두 경로 중 하나가 성공하면 precheck 가
+> 당일 중복 실행을 자동 스킵.
+
+### PAT 만료 후
+
+1년 뒤 GitHub 이메일 알림 → 같은 방법으로 재발급
+→ cron-job.org 잡의 `Authorization` 헤더 값만 교체.
 
 ## 갱신 범위 (사용자 결정)
 
