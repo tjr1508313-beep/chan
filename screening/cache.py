@@ -8,7 +8,7 @@
         PK: (ticker, date)
         - traded_value = close × volume (미국 USD / 한국 KRW 거래대금)
     metadata (ticker, name_en, name_kr, sector, country, exchange,
-              market_cap, is_china, is_risk, updated_at)
+              market_cap, is_china, is_risk, caution_flags, updated_at)
         PK: ticker
     index_prices (index_code, date, close)
         PK: (index_code, date)
@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS metadata (
     market_cap REAL,
     is_china   INTEGER,
     is_risk    INTEGER,
+    caution_flags TEXT,
     updated_at TEXT
 )
 """
@@ -114,6 +115,7 @@ def init_cache() -> None:
         for ddl in _DDL_INDEXES:
             conn.execute(ddl)
         _migrate_dollar_volume_column(conn)
+        _migrate_caution_flags_column(conn)
 
 
 def _migrate_dollar_volume_column(conn: sqlite3.Connection) -> None:
@@ -126,6 +128,13 @@ def _migrate_dollar_volume_column(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(prices)").fetchall()}
     if "dollar_volume" in cols and "traded_value" not in cols:
         conn.execute("ALTER TABLE prices RENAME COLUMN dollar_volume TO traded_value")
+
+
+def _migrate_caution_flags_column(conn: sqlite3.Connection) -> None:
+    """metadata.caution_flags 컬럼이 없으면 추가 (구 DB / 원격 동기 DB 대응)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(metadata)").fetchall()}
+    if "caution_flags" not in cols:
+        conn.execute("ALTER TABLE metadata ADD COLUMN caution_flags TEXT")
 
 
 # ---------------------------------------------------------------------------
@@ -316,14 +325,15 @@ def cache_save_meta(ticker: str, meta: dict) -> None:
         float(meta["market_cap"]) if meta.get("market_cap") not in (None, "") else None,
         _bool_to_int(meta.get("is_china")),
         _bool_to_int(meta.get("is_risk")),
+        meta.get("caution_flags"),
         updated_at,
     )
 
     sql = (
         "INSERT OR REPLACE INTO metadata "
         "(ticker, name_en, name_kr, sector, country, exchange, "
-        "market_cap, is_china, is_risk, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "market_cap, is_china, is_risk, caution_flags, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     with _connect() as conn:
         conn.execute(sql, row)
@@ -335,7 +345,7 @@ def cache_load_meta(ticker: str) -> dict | None:
     with _connect() as conn:
         row = conn.execute(
             "SELECT name_en, name_kr, sector, country, exchange, "
-            "market_cap, is_china, is_risk, updated_at "
+            "market_cap, is_china, is_risk, caution_flags, updated_at "
             "FROM metadata WHERE ticker = ?",
             (t,),
         ).fetchone()
@@ -350,8 +360,31 @@ def cache_load_meta(ticker: str) -> dict | None:
         "market_cap": row[5],
         "is_china": bool(row[6]) if row[6] is not None else None,
         "is_risk": bool(row[7]) if row[7] is not None else None,
-        "updated_at": row[8],
+        "caution_flags": row[8],
+        "updated_at": row[9],
     }
+
+
+def update_risk_flags(flags: dict) -> None:
+    """메타 TTL과 무관하게 is_risk / caution_flags 두 컬럼만 갱신.
+
+    flags: { code: {"is_risk": bool, "labels": list[str]} }
+    - metadata 행이 이미 있는 코드만 UPDATE (행 생성은 메타 갱신 담당).
+    - flags 에 없는 모든 종목은 두 컬럼을 클리어(0/NULL)해 지정 해제를 반영.
+    """
+    with _connect() as conn:
+        existing = {r[0] for r in conn.execute("SELECT ticker FROM metadata").fetchall()}
+        conn.execute("UPDATE metadata SET is_risk = 0, caution_flags = NULL")
+        for code, info in flags.items():
+            t = str(code).strip().upper()
+            if t not in existing:
+                continue
+            labels = info.get("labels") or []
+            caution = ",".join(labels) if labels else None
+            conn.execute(
+                "UPDATE metadata SET is_risk = ?, caution_flags = ? WHERE ticker = ?",
+                (1 if info.get("is_risk") else 0, caution, t),
+            )
 
 
 def cache_meta_age_days(ticker: str) -> int | None:
