@@ -264,9 +264,23 @@ def _apply_remote(tmp_remote: Path) -> tuple[str, int]:
             tables = [r[0] for r in cur.fetchall()]
             merged_rows = 0
             for t in tables:
-                # 원격에 없는 row 만 채워넣기 (원격 우선)
+                # 원격에 없는 테이블은 스킵
+                main_exists = conn.execute(
+                    "SELECT name FROM main.sqlite_master WHERE type='table' AND name=?", (t,)
+                ).fetchone()
+                if not main_exists:
+                    continue
+                # 공통 컬럼만 사용 — 스키마 버전 불일치(컬럼 추가/삭제) 대응
+                main_cols = {r[1] for r in conn.execute(f"PRAGMA main.table_info({t})").fetchall()}
+                old_cols = {r[1] for r in conn.execute(f"PRAGMA oldlocal.table_info({t})").fetchall()}
+                common = [r[1] for r in conn.execute(f"PRAGMA main.table_info({t})").fetchall()
+                          if r[1] in old_cols]
+                if not common:
+                    continue
+                col_list = ", ".join(common)
                 cur = conn.execute(
-                    f"INSERT OR IGNORE INTO main.{t} SELECT * FROM oldlocal.{t}"
+                    f"INSERT OR IGNORE INTO main.{t} ({col_list}) "
+                    f"SELECT {col_list} FROM oldlocal.{t}"
                 )
                 merged_rows += cur.rowcount or 0
             conn.commit()
