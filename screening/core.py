@@ -390,6 +390,11 @@ def screen_apply_filters(
 # RS 계산 — Phase 1.5 에서 구현
 # ---------------------------------------------------------------------------
 
+def calc_weighted_rs(close: pd.Series) -> float:
+    """Minervini 가중 RS (public). `_calc_weighted_rs` 와 동일."""
+    return _calc_weighted_rs(close)
+
+
 def _calc_weighted_rs(close: pd.Series) -> float:
     """Minervini 가중 RS.
 

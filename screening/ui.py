@@ -40,6 +40,7 @@ from .batch_kr import (
 from .cache import (
     cache_get_all_last_price_dates,
     cache_load_index,
+    cache_load_meta,
     cache_load_prices,
     cache_load_universe,
     cache_prune_orphan_prices,
@@ -47,9 +48,11 @@ from .cache import (
 )
 from .cache_sync import get_last_sync_info, sync_from_remote
 from .core import (
+    calc_weighted_rs,
     calc_wilder_atr,
     screen_apply_filters,
     screen_build_screening_df,
+    screen_calc_rs,
     screen_filter_by_index_lag,
     screen_rank_rs,
 )
@@ -964,8 +967,158 @@ def _fmt_cell(value, fmt: str, na: str = "—") -> str:
         return str(value)
 
 
+def _render_ticker_search_result(
+    spec: dict, raw_input: str, rs_period: int, index_code: str
+) -> None:
+    """검색된 티커의 정보 카드를 랭킹 테이블 위에 표시."""
+    ticker = raw_input.strip().upper() if spec.get("normalize_upper", True) else raw_input.strip()
+    if not ticker:
+        return
+
+    days_needed = max(rs_period + 10, 263)
+    prices = cache_load_prices(ticker, days=days_needed)
+    if prices is None or prices.empty:
+        st.warning(
+            f"**{ticker}** 캐시 데이터가 없습니다. "
+            "새로고침 후 다시 시도하거나 티커를 확인해주세요.",
+            icon="🔍",
+        )
+        return
+
+    index_prices = cache_load_index(index_code, days=days_needed)
+    meta = cache_load_meta(ticker) or {}
+
+    close = prices["Close"]
+    last_price = float(close.iloc[-1])
+
+    # RS (지수 대비)
+    rs_series = screen_calc_rs(prices, index_prices, period=rs_period)
+    rs_val = float(rs_series.iloc[0]) if not rs_series.empty else float("nan")
+
+    # RS 가중
+    rs_w = calc_weighted_rs(close)
+
+    # N일 수익률
+    if len(close) > rs_period:
+        ret_n = float(close.iloc[-1]) / float(close.iloc[-rs_period - 1]) - 1
+    else:
+        ret_n = float("nan")
+
+    # 5일 수익률
+    if len(close) > 5:
+        ret_5 = float(close.iloc[-1]) / float(close.iloc[-6]) - 1
+    else:
+        ret_5 = float("nan")
+
+    # 20일 평균 거래대금
+    tv = prices.get("traded_value") if "traded_value" in prices.columns else None
+    avg_tv = float(tv.tail(20).mean()) if tv is not None and tv.dropna().shape[0] > 0 else float("nan")
+
+    name = _first_valid_name(meta.get("name_kr"), meta.get("name_en"), ticker)
+    exchange = meta.get("exchange") or ""
+    market_cap = meta.get("market_cap")
+    is_risk = bool(meta.get("is_risk", False))
+    caution_flags = meta.get("caution_flags") or ""
+
+    up = last_price >= (float(close.iloc[-2]) if len(close) > 1 else last_price)
+    price_color = COLOR_PROFIT if up else COLOR_LOSS
+
+    def _cfmt(v, fmt, na="—"):
+        if v is None or (isinstance(v, float) and (v != v)):
+            return na
+        try:
+            return format(v, fmt)
+        except Exception:
+            return na
+
+    price_str = spec["price_chart_fmt"](last_price)
+    rs_str = _cfmt(rs_val, ".3f") if not (isinstance(rs_val, float) and rs_val != rs_val) else "—"
+    rsw_str = _cfmt(rs_w, ".3f") if not (isinstance(rs_w, float) and rs_w != rs_w) else "—"
+    ret_str = (f"{ret_n*100:+.2f}%" if not (isinstance(ret_n, float) and ret_n != ret_n) else "—")
+    ret5_str = (f"{ret_5*100:+.2f}%" if not (isinstance(ret_5, float) and ret_5 != ret_5) else "—")
+    ret_color = COLOR_PROFIT if not (isinstance(ret_n, float) and ret_n != ret_n) and ret_n >= 0 else COLOR_LOSS
+    ret5_color = COLOR_PROFIT if not (isinstance(ret_5, float) and ret_5 != ret_5) and ret_5 >= 0 else COLOR_LOSS
+
+    if not (isinstance(avg_tv, float) and avg_tv != avg_tv):
+        dv_str = spec["dv_metric_fmt"](avg_tv / spec["dv_divisor"])
+    else:
+        dv_str = "—"
+
+    if market_cap and not (isinstance(market_cap, float) and market_cap != market_cap):
+        if spec.get("show_market_cap_column"):
+            mc_str = f"{market_cap/1e8:,.0f}억"
+        else:
+            mc_str = f"${market_cap/1e9:.1f}B"
+    else:
+        mc_str = "—"
+
+    risk_badge = " 🔴위험" if is_risk else ""
+    caution_badge = ""
+    if caution_flags:
+        flag_map = {"경고": "🟠경고", "주의": "🟡주의", "과열": "🔥과열"}
+        parts = [flag_map.get(f.strip(), f.strip()) for f in caution_flags.split(",") if f.strip()]
+        if parts:
+            caution_badge = " " + " ".join(parts)
+
+    index_display = _index_display_name(index_code)
+
+    st.markdown(
+        f"""
+<div style="
+  background:{COLOR_CARD};
+  border:1.5px solid #3b82f6;
+  border-radius:12px;
+  padding:16px 20px 14px;
+  margin-bottom:10px;
+">
+  <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+    <span style="font-size:1.15rem; font-weight:700; color:{COLOR_TEXT};">{ticker}</span>
+    <span style="font-size:0.95rem; color:{COLOR_MUTED};">{name}</span>
+    {f'<span style="font-size:0.78rem; color:{COLOR_MUTED}; background:#f1f5f9; border-radius:4px; padding:1px 6px;">{exchange}</span>' if exchange else ""}
+    {f'<span style="font-size:0.78rem; color:#ef4444;">{risk_badge.strip()}</span>' if risk_badge else ""}
+    {f'<span style="font-size:0.78rem;">{caution_badge.strip()}</span>' if caution_badge else ""}
+  </div>
+  <div style="display:flex; flex-wrap:wrap; gap:18px; align-items:center;">
+    <div>
+      <div style="font-size:0.72rem; color:{COLOR_MUTED}; margin-bottom:2px;">현재가</div>
+      <div style="font-size:1.1rem; font-weight:700; color:{price_color};">{price_str}</div>
+    </div>
+    <div>
+      <div style="font-size:0.72rem; color:{COLOR_MUTED}; margin-bottom:2px;">RS ({rs_period}일, {index_display})</div>
+      <div style="font-size:1.05rem; font-weight:600; color:{COLOR_TEXT};">{rs_str}</div>
+    </div>
+    <div>
+      <div style="font-size:0.72rem; color:{COLOR_MUTED}; margin-bottom:2px;">RS 가중</div>
+      <div style="font-size:1.05rem; font-weight:600; color:{COLOR_TEXT};">{rsw_str}</div>
+    </div>
+    <div>
+      <div style="font-size:0.72rem; color:{COLOR_MUTED}; margin-bottom:2px;">{rs_period}일 수익률</div>
+      <div style="font-size:1.05rem; font-weight:600; color:{ret_color};">{ret_str}</div>
+    </div>
+    <div>
+      <div style="font-size:0.72rem; color:{COLOR_MUTED}; margin-bottom:2px;">5일 수익률</div>
+      <div style="font-size:1.05rem; font-weight:600; color:{ret5_color};">{ret5_str}</div>
+    </div>
+    <div>
+      <div style="font-size:0.72rem; color:{COLOR_MUTED}; margin-bottom:2px;">거래대금(20D)</div>
+      <div style="font-size:1.0rem; font-weight:500; color:{COLOR_TEXT};">{dv_str}</div>
+    </div>
+    <div>
+      <div style="font-size:0.72rem; color:{COLOR_MUTED}; margin-bottom:2px;">시가총액</div>
+      <div style="font-size:1.0rem; font-weight:500; color:{COLOR_TEXT};">{mc_str}</div>
+    </div>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    # 차트가 col_right에 표시되도록 selected_ticker 세팅
+    st.session_state[_key(spec, "selected_ticker")] = ticker
+
+
 def _render_ranking_table(
-    spec: dict, ranked: pd.DataFrame, rs_period: int
+    spec: dict, ranked: pd.DataFrame, rs_period: int, index_code: str = ""
 ) -> str | None:
     """랭킹 테이블 — 별표 컬럼 + 스파크라인 + 행 클릭으로 차트 픽."""
     if ranked.empty:
@@ -973,14 +1126,30 @@ def _render_ranking_table(
 
     has_weighted = "rs_weighted" in ranked.columns and not ranked["rs_weighted"].isna().all()
     sort_options = ["RS", "RS가중"] if has_weighted else ["RS"]
-    sort_choice = st.pills(
-        "정렬 기준",
-        sort_options,
-        default="RS",
-        label_visibility="collapsed",
-        key=_key(spec, "sort_pills"),
-    )
+
+    pill_col, search_col = st.columns([2.2, 1.5], gap="small")
+    with pill_col:
+        sort_choice = st.pills(
+            "정렬 기준",
+            sort_options,
+            default="RS",
+            label_visibility="collapsed",
+            key=_key(spec, "sort_pills"),
+        )
+    with search_col:
+        placeholder = "티커 검색 (AAPL, 005930…)"
+        search_input = st.text_input(
+            "종목 검색",
+            placeholder=placeholder,
+            label_visibility="collapsed",
+            key=_key(spec, "search_ticker"),
+        )
+
     sort_col = "rs_weighted" if sort_choice == "RS가중" else "rs"
+
+    # 검색 결과 카드 (순위 테이블 위)
+    if search_input and search_input.strip():
+        _render_ticker_search_result(spec, search_input, rs_period, index_code)
 
     ranked = (
         ranked
@@ -1355,19 +1524,24 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
                 "양수 장에서의 RS 해석과 반대가 될 수 있습니다."
             )
 
-        selected_ticker = _render_ranking_table(spec, ranked, rs_period)
+        selected_ticker = _render_ranking_table(spec, ranked, rs_period, index_code)
         if selected_ticker is not None:
             st.session_state[_key(spec, "selected_ticker")] = selected_ticker
 
     with col_right:
         st.markdown("### 차트 패널")
-        selected = st.session_state.get(_key(spec, "selected_ticker"))
+        # 검색 입력 중이면 검색 티커 우선, 없으면 랭킹 선택 티커
+        search_val = st.session_state.get(_key(spec, "search_ticker"), "").strip()
+        selected = (
+            search_val.upper() if search_val and spec.get("normalize_upper", True)
+            else search_val
+        ) or st.session_state.get(_key(spec, "selected_ticker"))
         if selected:
             _render_chart(spec, str(selected), lookback_days=120)
         else:
             st.info(
-                "좌측 테이블에서 종목을 선택하면 "
-                "캔들스틱 + 5일 이평선 + 9일 ATR 차트가 표시됩니다."
+                "좌측 테이블에서 종목을 선택하거나 "
+                "티커를 검색하면 차트가 표시됩니다."
             )
 
 
