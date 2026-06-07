@@ -4,3 +4,4 @@ streamlit-lightweight-charts-pro>=0.3
 yfinance>=0.2.40
 finance-datareader>=0.9.80
 numpy>=1.24
+python-dotenv>=1.0

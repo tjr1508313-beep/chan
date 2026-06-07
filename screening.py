@@ -13,6 +13,15 @@
 """
 
 import logging
+import os
+
+# .env 파일이 있으면 환경변수로 자동 로드 (로컬 개발용)
+# 없어도 오류 없음 — Streamlit Cloud / GitHub Actions 는 각자 env 주입
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=False)  # 이미 설정된 환경변수는 덮어쓰지 않음
+except ImportError:
+    pass
 
 import streamlit as st
 
@@ -59,7 +68,7 @@ def main() -> None:
     apply_theme()
 
     # LS증권 OpenAPI 키: secrets.toml → os.environ (kr_risk 는 streamlit 비의존, env 만 읽음)
-    import os
+    # .env 에서 이미 로드됐으면 덮어쓰지 않음 (override=False)
     for _src, _dst in (("ls_app_key", "LS_APP_KEY"), ("ls_app_secret", "LS_APP_SECRET")):
         try:
             if _dst not in os.environ and _src in st.secrets:
