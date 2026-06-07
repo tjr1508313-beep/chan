@@ -429,6 +429,7 @@ _US_SPEC: dict[str, Any] = {
 
     "show_market_cap_filter": False,
     "show_china_filter": True,
+    "show_risk_filter": False,
 
     "extra_caption": None,
     "ticker_col_label": "티커",
@@ -496,6 +497,7 @@ _KR_SPEC: dict[str, Any] = {
     "min_marketcap_summary_fmt": lambda raw: f"시총 ≥ {raw/100_000_000:,.0f}억",
 
     "show_china_filter": False,
+    "show_risk_filter": True,
 
     "extra_caption": "✓ 모집단 단계에서 우선주/리츠/ETF/스팩/외국기업은 자동 제외됨",
     "ticker_col_label": "코드",
@@ -616,15 +618,17 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
                     "중국기업 제외", value=True,
                     key=_key(spec, "filter_exclude_china"),
                 )
-            exclude_risk = st.checkbox(
-                "관리/위험종목 제외", value=True,
-                key=_key(spec, "filter_exclude_risk"),
-                help=(
-                    "KRX 공시 기반 관리종목/투자주의/거래정지 제외. "
-                    "위험종목 데이터를 사이드바 새로고침에서 갱신해야 효과가 적용됩니다."
-                    if spec["code"] == "kr" else None
-                ),
-            )
+            if spec.get("show_risk_filter", True):
+                exclude_risk = st.checkbox(
+                    "관리/위험종목 제외", value=True,
+                    key=_key(spec, "filter_exclude_risk"),
+                    help=(
+                        "KRX 공시 기반 관리종목/투자주의/거래정지 제외. "
+                        "위험종목 데이터를 사이드바 새로고침에서 갱신해야 효과가 적용됩니다."
+                    ),
+                )
+            else:
+                exclude_risk = False
             if spec["extra_caption"]:
                 st.caption(spec["extra_caption"])
 
@@ -1113,7 +1117,10 @@ def _render_ticker_search_result(
         unsafe_allow_html=True,
     )
 
-    # 차트가 col_right에 표시되도록 selected_ticker 세팅
+    # 카드 바로 아래 컴팩트 차트
+    _render_chart(spec, ticker, lookback_days=90, height=360)
+
+    # col_right 차트도 같은 티커로 동기화
     st.session_state[_key(spec, "selected_ticker")] = ticker
 
 
@@ -1288,7 +1295,9 @@ def _render_ranking_table(
 
 # ─── 차트 패널 ──────────────────────────────────────────────────────
 
-def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
+def _render_chart(
+    spec: dict, ticker: str, lookback_days: int = 120, height: int = 620
+) -> None:
     df = ui_load_chart_df(ticker, days=lookback_days + 70)
 
     if df is None or len(df) < 15:
@@ -1398,7 +1407,7 @@ def _render_chart(spec: dict, ticker: str, lookback_days: int = 120) -> None:
     ]
 
     chart_opts = ChartOptions(
-        height=620,
+        height=height,
         layout=LayoutOptions(
             text_color=COLOR_TEXT,
             font_size=13,
@@ -1532,12 +1541,12 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
         st.markdown("### 차트 패널")
         # 검색 입력 중이면 검색 티커 우선, 없으면 랭킹 선택 티커
         search_val = st.session_state.get(_key(spec, "search_ticker"), "").strip()
-        selected = (
-            search_val.upper() if search_val and spec.get("normalize_upper", True)
-            else search_val
-        ) or st.session_state.get(_key(spec, "selected_ticker"))
-        if selected:
-            _render_chart(spec, str(selected), lookback_days=120)
+        if search_val:
+            chart_ticker = search_val.upper() if spec.get("normalize_upper", True) else search_val
+        else:
+            chart_ticker = st.session_state.get(_key(spec, "selected_ticker"))
+        if chart_ticker:
+            _render_chart(spec, str(chart_ticker), lookback_days=120)
         else:
             st.info(
                 "좌측 테이블에서 종목을 선택하거나 "
