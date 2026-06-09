@@ -110,7 +110,11 @@ def ui_load_index_tickers(index_code: str) -> list[str]:
     cached = cache_load_universe(index_code)
     if cached:
         return cached
-    return ui_refresh_index_universe(index_code)
+    try:
+        return ui_refresh_index_universe(index_code)
+    except Exception:
+        # 콜드 캐시 + 소스 실패(예: KRX 해외 IP 차단) 시 앱 로드가 죽지 않도록 빈 목록 반환.
+        return []
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -720,12 +724,26 @@ def _start_refresh(spec: dict, index_code: str, force: bool) -> None:
     if existing and existing.get("running"):
         return
 
-    tickers = ui_refresh_index_universe(index_code)
+    # 구성종목 소스 갱신은 메인 스레드에서 동기 실행된다. 해외 IP(예: Streamlit
+    # Cloud)에서 KRX(data.krx.co.kr)가 차단되면 fdr.StockListing 이 ValueError 를
+    # 던지는데, 여기서 잡지 않으면 render 전체가 죽는다. 캐시 유니버스로 폴백해
+    # 시세/메타 갱신은 계속 진행한다 (한국 시세는 Naver 소스라 해외 IP 에서도 동작).
+    universe_error: str | None = None
+    try:
+        tickers = ui_refresh_index_universe(index_code)
+    except Exception as e:
+        tickers = cache_load_universe(index_code)
+        universe_error = str(e)
+
     if not tickers:
         st.session_state[job_key] = {
             "running": False,
             "phase": "실패",
-            "error": "구성종목 리스트를 가져오지 못했습니다.",
+            "error": (
+                f"구성종목 리스트를 가져오지 못했습니다: {universe_error}"
+                if universe_error
+                else "구성종목 리스트를 가져오지 못했습니다."
+            ),
             "messages": [],
             "px_done": 0, "px_total": 0,
             "meta_done": 0, "meta_total": 0,
@@ -738,11 +756,17 @@ def _start_refresh(spec: dict, index_code: str, force: bool) -> None:
     target = _sort_tickers_stale_first(
         tickers, normalize_upper=spec["normalize_upper"]
     )
+    messages: list[str] = []
+    if universe_error:
+        messages.append(
+            f"⚠️ 구성종목 갱신 실패 → 캐시 목록 사용 ({len(target)}종목). "
+            "시세/메타만 갱신합니다."
+        )
     job: dict[str, Any] = {
         "running": True,
         "phase": "준비 중",
         "error": None,
-        "messages": [],
+        "messages": messages,
         "px_done": 0, "px_total": len(target),
         "meta_done": 0, "meta_total": len(target),
         "index_code": index_code, "force": force,
