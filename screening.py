@@ -48,11 +48,12 @@ def _sync_remote_cache_once():
 
 
 @st.cache_resource(show_spinner=False)
-def _init_cache_once() -> bool:
+def _init_cache_once(schema_version: int) -> bool:
     """앱 프로세스 동안 1회만 SQLite 스키마 초기화.
 
     `CREATE IF NOT EXISTS` 만 있는 idempotent 작업이라 rerun 마다 호출할
-    필요가 없다.
+    필요가 없다. 새 테이블/마이그레이션 추가 시 호출부의 schema_version 을
+    올려 기존 Streamlit resource 캐시를 무효화한다.
     """
     init_cache()
     return True
@@ -81,7 +82,7 @@ def main() -> None:
     _sync_remote_cache_once()
 
     # 캐시 DB 가 없는 환경(새 체크아웃 등)에서도 읽기 경로가 깨지지 않도록 보장
-    _init_cache_once()
+    _init_cache_once(schema_version=2)
 
     # ─── 비밀번호 잠금 (배포 환경에서만 활성, 로컬은 자동 비활성) ───
     require_password()

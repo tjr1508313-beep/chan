@@ -57,6 +57,8 @@ C:\스크리닝\
 - 첫 화면 지수 차트: `cache_save_index_chart_snapshot/load_index_chart_snapshot`
   - 기존 스냅샷 + 신규 OHLC 병합 후 가장 늦은 날짜 1개 제외
   - 최근 완성 봉 110개만 저장하므로 사이트 진입 시 원시 지수 일봉 집계 없음
+  - 구 원격 DB에 테이블이 없어도 로더는 빈 차트로 폴백하며,
+    `screening.py`의 `_init_cache_once(schema_version=2)`가 배포 시 스키마를 보강
 - 증분 커서: `cache_get_last_price_date`, `cache_get_last_index_date`
 - 일괄 조회: `cache_get_all_last_price_dates()` — 한 SQL 로 모든 ticker 마지막일 (stale-first 정렬용)
 - **신규** (2026-05-06): `cache_delete_prices(ticker)` — 분할 발생 시 옛 미조정 가격 통째로 삭제

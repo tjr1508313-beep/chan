@@ -901,7 +901,7 @@ def cache_load_index_chart_snapshot(
                 conn,
                 params=(code,),
             )
-        except sqlite3.OperationalError:
+        except (sqlite3.OperationalError, pd.errors.DatabaseError):
             return pd.DataFrame(columns=["Open", "High", "Low", "Close"])
 
     if df.empty:

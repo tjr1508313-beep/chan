@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import sqlite3
 
 import screening.cache as cache
 import screening.batch as batch
@@ -32,6 +33,20 @@ def test_index_chart_snapshot_keeps_110_and_drops_latest(tmp_path, monkeypatch):
     assert len(chart) == 110
     assert chart.index[-1] == prices.index[-2]
     assert chart.index[-1] != prices.index[-1]
+    assert list(chart.columns) == ["Open", "High", "Low", "Close"]
+
+
+def test_index_chart_snapshot_returns_empty_for_legacy_db_without_table(
+    tmp_path, monkeypatch
+):
+    db = tmp_path / "legacy.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE index_prices (index_code TEXT, date TEXT, close REAL)")
+    monkeypatch.setattr(cache, "DB_PATH", db)
+
+    chart = cache.cache_load_index_chart_snapshot("^TEST")
+
+    assert chart.empty
     assert list(chart.columns) == ["Open", "High", "Low", "Close"]
 
 
