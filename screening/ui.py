@@ -1245,9 +1245,9 @@ def _render_ticker_search_result(
     )
 
     # 카드 바로 아래 컴팩트 차트
-    _render_chart(spec, ticker, lookback_days=90, height=360)
+    _render_chart(spec, ticker, lookback_days=90, height=360, key_suffix="search")
 
-    # col_right 차트도 같은 티커로 동기화
+    # 검색 종목이 랭킹 안에도 있으면 해당 행 아래 차트도 함께 펼친다.
     st.session_state[_key(spec, "selected_ticker")] = ticker
 
 
@@ -1305,6 +1305,7 @@ def _render_ranking_table(
         return st.session_state.get(_key(spec, "selected_ticker"))
 
     favs_set = st.session_state.get(_key(spec, "favs"), set())
+    selected_ticker = st.session_state.get(_key(spec, "selected_ticker"))
 
     # 컬럼 — ★(0), 순위, 코드, 종목명, 현재가, 추이(5), RS, RS가중, 수익률, [시총], 거래대금
     columns: list[tuple[str, float]] = [
@@ -1419,13 +1420,27 @@ def _render_ranking_table(
                     use_container_width=True,
                 )
 
+            if ticker == selected_ticker:
+                with st.container(key=f"scr_inline_chart_{spec['code']}_{ticker}"):
+                    _render_chart(
+                        spec,
+                        ticker,
+                        lookback_days=120,
+                        height=440,
+                        key_suffix="inline",
+                    )
+
     return st.session_state.get(_key(spec, "selected_ticker"))
 
 
 # ─── 차트 패널 ──────────────────────────────────────────────────────
 
 def _render_chart(
-    spec: dict, ticker: str, lookback_days: int = 120, height: int = 620
+    spec: dict,
+    ticker: str,
+    lookback_days: int = 120,
+    height: int = 620,
+    key_suffix: str = "default",
 ) -> None:
     df = ui_load_chart_df(ticker, days=lookback_days + 70)
 
@@ -1553,7 +1568,7 @@ def _render_chart(
     )
 
     chart = Chart(series=series, options=chart_opts)
-    chart.render(key=f"lwc_chart_{spec['code']}_{ticker}")
+    chart.render(key=f"lwc_chart_{spec['code']}_{ticker}_{key_suffix}")
 
     _render_chart_metrics(spec, df, atr9)
 
@@ -1604,72 +1619,54 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
         tickers_tuple=tuple(tickers),
     )
 
-    col_left, col_right = st.columns([1.2, 1], gap="large")
     index_display = _index_display_name(index_code)
 
-    with col_left:
-        _render_rs_header(index_code, index_display, rs_period, top_n)
-        _render_filter_summary(spec, filter_config)
-        _render_pipeline_badge(stats, len(ranked))
+    _render_rs_header(index_code, index_display, rs_period, top_n)
+    _render_filter_summary(spec, filter_config)
+    _render_pipeline_badge(stats, len(ranked))
 
-        if stats.get("total", 0) == 0 or not tickers:
+    if stats.get("total", 0) == 0 or not tickers:
+        st.warning(
+            f"**{index_display}** 구성종목 데이터가 캐시에 없습니다. "
+            f"사이드바의 **[{spec['refresh_btn']}]** 버튼을 눌러 "
+            "데이터를 먼저 받아주세요."
+        )
+        return
+    if stats.get("final", 0) == 0:
+        st.warning(
+            "필터 조건에 맞는 종목이 없습니다. "
+            "사이드바의 **필터 설정** 을 완화해보세요."
+        )
+        return
+    if ranked.empty:
+        lag_excluded = stats.get("lag_excluded", 0)
+        after_lag = stats.get("after_lag")
+        if lag_excluded > 0 and after_lag == 0:
             st.warning(
-                f"**{index_display}** 구성종목 데이터가 캐시에 없습니다. "
-                f"사이드바의 **[{spec['refresh_btn']}]** 버튼을 눌러 "
-                "데이터를 먼저 받아주세요."
+                f"필터 통과한 {lag_excluded}개 종목 모두의 시세 캐시가 "
+                f"**{index_display}** 지수보다 옛날 날짜에 머물러 있어, "
+                f"RS 시간 정합성 검사에서 전부 제외됐습니다. "
+                f"사이드바의 **[{spec['refresh_btn']}]** 을 눌러 "
+                f"시세 캐시를 최신화해주세요."
             )
             return
-        if stats.get("final", 0) == 0:
+        idx_cache = cache_load_index(index_code, days=rs_period + 10)
+        if idx_cache is None or idx_cache.empty or len(idx_cache) < rs_period + 1:
             st.warning(
-                "필터 조건에 맞는 종목이 없습니다. "
-                "사이드바의 **필터 설정** 을 완화해보세요."
+                f"**{index_display}** 지수 시세가 캐시에 없거나 부족합니다. "
+                f"사이드바에서 이 지수를 선택한 상태로 "
+                f"**[{spec['refresh_btn']}]** 를 눌러 지수 데이터를 받아주세요."
             )
-            return
-        if ranked.empty:
-            lag_excluded = stats.get("lag_excluded", 0)
-            after_lag = stats.get("after_lag")
-            if lag_excluded > 0 and after_lag == 0:
-                st.warning(
-                    f"필터 통과한 {lag_excluded}개 종목 모두의 시세 캐시가 "
-                    f"**{index_display}** 지수보다 옛날 날짜에 머물러 있어, "
-                    f"RS 시간 정합성 검사에서 전부 제외됐습니다. "
-                    f"사이드바의 **[{spec['refresh_btn']}]** 을 눌러 "
-                    f"시세 캐시를 최신화해주세요."
-                )
-                return
-            idx_cache = cache_load_index(index_code, days=rs_period + 10)
-            if idx_cache is None or idx_cache.empty or len(idx_cache) < rs_period + 1:
-                st.warning(
-                    f"**{index_display}** 지수 시세가 캐시에 없거나 부족합니다. "
-                    f"사이드바에서 이 지수를 선택한 상태로 "
-                    f"**[{spec['refresh_btn']}]** 를 눌러 지수 데이터를 받아주세요."
-                )
-            else:
-                st.warning(
-                    f"{index_display} 기준으로 RS 계산 가능한 종목이 없습니다. "
-                    "종목 및 지수 시세 캐시를 새로고침해주세요."
-                )
-            return
-
-        selected_ticker = _render_ranking_table(spec, ranked, rs_period, index_code)
-        if selected_ticker is not None:
-            st.session_state[_key(spec, "selected_ticker")] = selected_ticker
-
-    with col_right:
-        st.markdown("### 차트 패널")
-        # 검색 입력 중이면 검색 티커 우선, 없으면 랭킹 선택 티커
-        search_val = st.session_state.get(_key(spec, "search_ticker"), "").strip()
-        if search_val:
-            chart_ticker = search_val.upper() if spec.get("normalize_upper", True) else search_val
-        else:
-            chart_ticker = st.session_state.get(_key(spec, "selected_ticker"))
-        if chart_ticker:
-            _render_chart(spec, str(chart_ticker), lookback_days=120)
         else:
             st.info(
-                "좌측 테이블에서 종목을 선택하거나 "
-                "티커를 검색하면 차트가 표시됩니다."
+                f"{index_display} 기준으로 RS 계산 가능한 종목이 없습니다. "
+                "종목 및 지수 시세 캐시를 새로고침해주세요."
             )
+        return
+
+    selected_ticker = _render_ranking_table(spec, ranked, rs_period, index_code)
+    if selected_ticker is not None:
+        st.session_state[_key(spec, "selected_ticker")] = selected_ticker
 
 
 # ─── 퍼블릭 엔트리 ─────────────────────────────────────────────────
@@ -1731,9 +1728,10 @@ def _render_remote_sync_badge() -> None:
 
 
 def render_screening_page() -> None:
-    """미국주식 + 한국주식을 한 화면에 표시 (위: 미국, 아래: 한국).
+    """미국주식 + 한국주식 순위를 좌우에 나란히 표시.
 
     상단에 시장 요약 카드 2개 (US + KR) 가 함께 표시된다.
+    선택한 종목의 차트는 각 시장의 해당 순위 행 바로 아래에 펼쳐진다.
     """
     with st.sidebar:
         st.markdown("#### 주식 스크리닝")
@@ -1754,10 +1752,10 @@ def render_screening_page() -> None:
         _render_market_card(_KR_SPEC, kr_settings)
     st.write("")
 
-    st.markdown("## 미국주식")
-    _render_screening_section(_US_SPEC, us_settings)
-
-    st.divider()
-
-    st.markdown("## 한국주식")
-    _render_screening_section(_KR_SPEC, kr_settings)
+    rank_cols = st.columns(2, gap="large")
+    with rank_cols[0]:
+        st.markdown("## 미국주식")
+        _render_screening_section(_US_SPEC, us_settings)
+    with rank_cols[1]:
+        st.markdown("## 한국주식")
+        _render_screening_section(_KR_SPEC, kr_settings)

@@ -292,6 +292,16 @@ div.st-key-scr_rank_table_kr [data-testid="stHorizontalBlock"]:hover .scr-rank-s
     opacity: 1;
 }}
 
+/* 선택 행 바로 아래에 펼쳐지는 종목 차트 */
+div[class*="st-key-scr_inline_chart_"] {{
+    background: {COLOR_CARD};
+    border-top: 2px solid {COLOR_ACCENT};
+    border-bottom: 1px solid {COLOR_BORDER};
+    padding: 14px 12px 12px;
+    margin: -1px 0 8px;
+    box-shadow: inset 0 6px 12px rgba(49, 130, 246, 0.04);
+}}
+
 /* 프로그레스 바 */
 .stProgress > div > div > div {{
     background: linear-gradient(90deg, {COLOR_ACCENT}, #60a5fa) !important;
