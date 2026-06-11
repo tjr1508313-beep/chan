@@ -111,9 +111,33 @@ CREATE TABLE IF NOT EXISTS universe (
 )
 """
 
+# 화면 진입 때마다 원시 일봉을 다시 집계하지 않도록 저장하는 표시용 스냅샷.
+_DDL_SCREENING_METRICS = """
+CREATE TABLE IF NOT EXISTS screening_metrics (
+    ticker                 TEXT PRIMARY KEY,
+    as_of_date             TEXT,
+    last_price             REAL,
+    avg_traded_value_20d   REAL,
+    max_daily_range_20d    REAL,
+    recent_atr_drop_mult   REAL,
+    rs_weighted            REAL,
+    below_ma5              INTEGER
+)
+"""
+
+_DDL_STOCK_RETURNS = """
+CREATE TABLE IF NOT EXISTS stock_returns (
+    ticker    TEXT NOT NULL,
+    period    INTEGER NOT NULL,
+    return_n  REAL,
+    PRIMARY KEY (ticker, period)
+)
+"""
+
 _DDL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date)",
     "CREATE INDEX IF NOT EXISTS idx_index_prices_date ON index_prices(date)",
+    "CREATE INDEX IF NOT EXISTS idx_stock_returns_period ON stock_returns(period)",
 ]
 
 
@@ -124,6 +148,8 @@ def init_cache() -> None:
         conn.execute(_DDL_METADATA)
         conn.execute(_DDL_INDEX_PRICES)
         conn.execute(_DDL_UNIVERSE)
+        conn.execute(_DDL_SCREENING_METRICS)
+        conn.execute(_DDL_STOCK_RETURNS)
         for ddl in _DDL_INDEXES:
             conn.execute(ddl)
         _migrate_dollar_volume_column(conn)
@@ -354,6 +380,116 @@ def cache_load_prices_bulk(
         g = g.drop(columns=["ticker"]).set_index("date").sort_index()
         out[str(tk)] = _repair_ohlc(g[_PRICE_COLS])
     return out
+
+
+def cache_save_computed_snapshot(
+    metrics: pd.DataFrame,
+    returns: pd.DataFrame,
+    target_tickers: Iterable[str],
+) -> None:
+    """화면 표시용 종목 지표와 기간별 수익률을 원자적으로 교체 저장."""
+    targets = {
+        str(t).strip().upper() for t in target_tickers if t and str(t).strip()
+    }
+    if not targets:
+        return
+
+    metric_rows = []
+    if metrics is not None and not metrics.empty:
+        for ticker, row in metrics.iterrows():
+            metric_rows.append(
+                (
+                    str(ticker).strip().upper(),
+                    row.get("as_of_date"),
+                    row.get("last_price"),
+                    row.get("avg_traded_value_20d"),
+                    row.get("max_daily_range_20d"),
+                    row.get("recent_atr_drop_mult"),
+                    row.get("rs_weighted"),
+                    1 if row.get("below_ma5") else 0,
+                )
+            )
+
+    return_rows = []
+    if returns is not None and not returns.empty:
+        for row in returns.itertuples(index=False):
+            return_rows.append(
+                (str(row.ticker).strip().upper(), int(row.period), float(row.return_n))
+            )
+
+    with _connect() as conn:
+        conn.execute(_DDL_SCREENING_METRICS)
+        conn.execute(_DDL_STOCK_RETURNS)
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS _snapshot_targets (ticker TEXT PRIMARY KEY)")
+        conn.execute("DELETE FROM _snapshot_targets")
+        conn.executemany(
+            "INSERT OR IGNORE INTO _snapshot_targets (ticker) VALUES (?)",
+            [(t,) for t in targets],
+        )
+        conn.execute(
+            "DELETE FROM screening_metrics WHERE ticker IN "
+            "(SELECT ticker FROM _snapshot_targets)"
+        )
+        conn.execute(
+            "DELETE FROM stock_returns WHERE ticker IN "
+            "(SELECT ticker FROM _snapshot_targets)"
+        )
+        if metric_rows:
+            conn.executemany(
+                "INSERT INTO screening_metrics "
+                "(ticker, as_of_date, last_price, avg_traded_value_20d, "
+                "max_daily_range_20d, recent_atr_drop_mult, rs_weighted, below_ma5) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                metric_rows,
+            )
+        if return_rows:
+            conn.executemany(
+                "INSERT INTO stock_returns (ticker, period, return_n) VALUES (?, ?, ?)",
+                return_rows,
+            )
+
+
+def cache_load_computed_metrics(tickers: Iterable[str]) -> pd.DataFrame:
+    """저장된 표시용 종목 지표를 일괄 조회."""
+    tset = {str(t).strip().upper() for t in tickers if t and str(t).strip()}
+    if not tset:
+        return pd.DataFrame()
+    with _connect() as conn:
+        try:
+            rows = conn.execute(
+                "SELECT ticker, as_of_date, last_price, avg_traded_value_20d, "
+                "max_daily_range_20d, recent_atr_drop_mult, rs_weighted, below_ma5 "
+                "FROM screening_metrics"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return pd.DataFrame()
+    rows = [r for r in rows if str(r[0]) in tset]
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "ticker", "as_of_date", "last_price", "avg_traded_value_20d",
+            "max_daily_range_20d", "recent_atr_drop_mult", "rs_weighted", "below_ma5",
+        ],
+    ).set_index("ticker")
+
+
+def cache_load_stock_returns(tickers: Iterable[str], period: int) -> pd.Series:
+    """저장된 N일 수익률을 티커 인덱스 Series 로 조회."""
+    tset = {str(t).strip().upper() for t in tickers if t and str(t).strip()}
+    if not tset:
+        return pd.Series(dtype=float)
+    with _connect() as conn:
+        try:
+            rows = conn.execute(
+                "SELECT ticker, return_n FROM stock_returns WHERE period = ?",
+                (int(period),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return pd.Series(dtype=float)
+    values = {str(t): float(v) for t, v in rows if str(t) in tset and v is not None}
+    return pd.Series(values, dtype=float)
 
 
 def cache_delete_prices(ticker: str) -> int:

@@ -39,9 +39,12 @@ import pandas as pd
 from .cache import (
     cache_get_all_last_price_dates,
     cache_get_last_index_date,
+    cache_load_computed_metrics,
     cache_load_index,
     cache_load_meta_bulk,
     cache_load_prices_bulk,
+    cache_load_stock_returns,
+    cache_save_computed_snapshot,
 )
 from .china_filter import is_china_ticker
 
@@ -197,6 +200,7 @@ def _last_close(prices: pd.DataFrame) -> float:
 def screen_build_screening_df(
     tickers: Iterable[str],
     lookback_days: int = 20,
+    use_snapshot: bool = True,
 ) -> pd.DataFrame:
     """캐시에서 시세/메타를 꺼내 종목별 1행 집계 DataFrame 을 만든다.
 
@@ -208,14 +212,41 @@ def screen_build_screening_df(
         index=ticker (대문자), columns=_SCREEN_DF_COLUMNS 의 DataFrame.
         시세/메타가 전혀 없는 티커는 조용히 건너뛴다.
     """
+    norm_tickers = [str(t).strip().upper() for t in tickers if t and str(t).strip()]
+    meta_map = cache_load_meta_bulk(norm_tickers)
+    if use_snapshot:
+        computed = cache_load_computed_metrics(norm_tickers)
+        if set(norm_tickers).issubset(computed.index):
+            rows = []
+            for t, metric in computed.iterrows():
+                meta = meta_map.get(t) or {}
+                rows.append(
+                    {
+                        "ticker": t,
+                        "last_price": metric.get("last_price"),
+                        "avg_traded_value_20d": metric.get("avg_traded_value_20d"),
+                        "max_daily_range_20d": metric.get("max_daily_range_20d"),
+                        "recent_atr_drop_mult": metric.get("recent_atr_drop_mult"),
+                        "market_cap": meta.get("market_cap"),
+                        "is_china": bool(
+                            meta.get("is_china") or is_china_ticker(t, meta=meta or None)
+                        ),
+                        "is_risk": bool(meta.get("is_risk")),
+                        "caution_flags": meta.get("caution_flags"),
+                        "name_en": meta.get("name_en"),
+                        "name_kr": meta.get("name_kr"),
+                        "sector": meta.get("sector"),
+                        "country": meta.get("country"),
+                    }
+                )
+            return pd.DataFrame(rows).set_index("ticker")[_SCREEN_DF_COLUMNS]
+
     rows: list[dict] = []
     seen: set[str] = set()
 
     # 종목별 개별 쿼리(2회×수천종목) 대신 일괄 조회 — 커넥션/왕복 오버헤드 제거.
     # 변동폭 계산은 prev_close 용 1일 여유가 필요, 안전 여유 +5
-    norm_tickers = [str(t).strip().upper() for t in tickers if t and str(t).strip()]
     prices_map = cache_load_prices_bulk(norm_tickers, days=lookback_days + 5)
-    meta_map = cache_load_meta_bulk(norm_tickers)
     empty_prices = pd.DataFrame(
         columns=["Open", "High", "Low", "Close", "Volume", "traded_value"]
     )
@@ -274,6 +305,67 @@ def screen_build_screening_df(
     df = pd.DataFrame(rows).set_index("ticker")
     # 컬럼 순서 고정
     return df[_SCREEN_DF_COLUMNS]
+
+
+def screen_rebuild_computed_snapshot(tickers: Iterable[str]) -> dict[str, int]:
+    """원시 일봉에서 화면 표시용 지표와 5~60일 수익률을 미리 계산해 저장."""
+    norm_tickers = sorted(
+        {str(t).strip().upper() for t in tickers if t and str(t).strip()}
+    )
+    if not norm_tickers:
+        return {"metrics": 0, "returns": 0}
+
+    prices_map = cache_load_prices_bulk(norm_tickers, days=_WEIGHTED_MIN_ROWS + 10)
+    metric_rows: list[dict] = []
+    return_rows: list[dict] = []
+
+    for ticker in norm_tickers:
+        prices = prices_map.get(ticker)
+        if prices is None or prices.empty:
+            metric_rows.append(
+                {
+                    "ticker": ticker,
+                    "as_of_date": None,
+                    "last_price": float("nan"),
+                    "avg_traded_value_20d": float("nan"),
+                    "max_daily_range_20d": float("nan"),
+                    "recent_atr_drop_mult": float("nan"),
+                    "rs_weighted": float("nan"),
+                    "below_ma5": False,
+                }
+            )
+            continue
+        close = prices["Close"].dropna()
+        last_price = _last_close(prices)
+        below_ma5 = False
+        if len(close) >= 5:
+            ma5 = float(close.tail(5).mean())
+            below_ma5 = bool(last_price < ma5) if pd.notna(last_price) else False
+        metric_rows.append(
+            {
+                "ticker": ticker,
+                "as_of_date": prices.index[-1].strftime("%Y-%m-%d"),
+                "last_price": last_price,
+                "avg_traded_value_20d": _avg_traded_value(prices, 20),
+                "max_daily_range_20d": _max_daily_range(prices, 20),
+                "recent_atr_drop_mult": _recent_atr_drop_multiple(prices, 9, 2),
+                "rs_weighted": _calc_weighted_rs(prices["Close"]),
+                "below_ma5": below_ma5,
+            }
+        )
+        for period in range(5, 61):
+            value = _period_return(prices["Close"], period)
+            if pd.notna(value):
+                return_rows.append(
+                    {"ticker": ticker, "period": period, "return_n": float(value)}
+                )
+
+    metrics = pd.DataFrame(metric_rows)
+    if not metrics.empty:
+        metrics = metrics.set_index("ticker")
+    returns = pd.DataFrame(return_rows, columns=["ticker", "period", "return_n"])
+    cache_save_computed_snapshot(metrics, returns, norm_tickers)
+    return {"metrics": len(metric_rows), "returns": len(return_rows)}
 
 
 # ---------------------------------------------------------------------------
@@ -591,10 +683,27 @@ def screen_rank_rs(
     index_df = cache_load_index(index_code, days=days)
     idx_return = _index_return(index_df, period)
 
+    norm_tickers = [str(t).strip().upper() for t in tickers if t and str(t).strip()]
+    cached_returns = cache_load_stock_returns(norm_tickers, period)
+    cached_metrics = cache_load_computed_metrics(norm_tickers)
+    if (
+        not cached_returns.empty
+        and set(norm_tickers).issubset(cached_metrics.index)
+        and pd.notna(idx_return)
+    ):
+        joined = cached_metrics.join(cached_returns.rename("return_n"), how="inner")
+        if not joined.empty:
+            joined["rs"] = joined["return_n"] / idx_return
+            joined["index_return_n"] = float(idx_return)
+            joined = joined.rename(columns={"rs_weighted": "rs_weighted"})
+            joined = joined.sort_values("rs", ascending=False, kind="mergesort").head(top_n)
+            joined = joined.reset_index().rename(columns={"index": "ticker"})
+            joined.insert(0, "rank", range(1, len(joined) + 1))
+            return joined[_RANK_DF_COLUMNS]
+
     rows: list[dict] = []
     seen: set[str] = set()
 
-    norm_tickers = [str(t).strip().upper() for t in tickers if t and str(t).strip()]
     prices_map = cache_load_prices_bulk(norm_tickers, days=days)
 
     for t in norm_tickers:

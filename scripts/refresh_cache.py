@@ -30,7 +30,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from screening import batch, batch_kr, cache  # noqa: E402
+from screening import batch, batch_kr, cache, core  # noqa: E402
 from screening.data import us_get_nasdaq_tickers, us_get_sp500_tickers  # noqa: E402
 from screening.data_kr import kr_get_kosdaq_tickers, kr_get_kospi_tickers  # noqa: E402
 
@@ -62,6 +62,7 @@ def _refresh_us() -> dict:
     )
     # 현재 유니버스에 없는 죽은 티커 정리 + VACUUM (push 할 DB 를 작게 유지)
     out["pruned"] = cache.cache_prune_orphan_prices(vacuum=True)
+    out["computed"] = core.screen_rebuild_computed_snapshot(tickers)
     return out
 
 
@@ -90,6 +91,7 @@ def _refresh_kr() -> dict:
     out["risk"] = batch_kr.screen_refresh_risk_kr()
     # 현재 유니버스에 없는 죽은 티커 정리 + VACUUM (push 할 DB 를 작게 유지)
     out["pruned"] = cache.cache_prune_orphan_prices(vacuum=True)
+    out["computed"] = core.screen_rebuild_computed_snapshot(tickers)
     return out
 
 

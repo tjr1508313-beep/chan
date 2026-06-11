@@ -55,6 +55,7 @@ from .core import (
     screen_calc_rs,
     screen_filter_by_index_lag,
     screen_rank_rs,
+    screen_rebuild_computed_snapshot,
 )
 from .data import us_get_nasdaq_tickers, us_get_sp500_tickers
 from .data_kr import kr_get_kosdaq_tickers, kr_get_kospi_tickers
@@ -708,6 +709,12 @@ def _refresh_worker(
         pruned = cache_prune_orphan_prices(vacuum=False)
         if pruned:
             job["messages"].append(f"정리: 죽은 티커 시세 {pruned:,}행 삭제")
+
+        job["phase"] = "화면 데이터 미리 계산"
+        computed = screen_rebuild_computed_snapshot(target)
+        job["messages"].append(
+            f"미리 계산: 종목={computed['metrics']}, 수익률={computed['returns']}"
+        )
 
         job["phase"] = "완료"
     except Exception as e:
