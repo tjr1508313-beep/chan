@@ -160,6 +160,19 @@ def _index_display_name(index_code: str) -> str:
     return _INDEX_DISPLAY.get(index_code, index_code)
 
 
+def _caution_badge_md(caution_flags: object) -> str:
+    """쉼표 구분 주의 플래그를 Streamlit 색상 배지 문자열로 변환."""
+    if caution_flags is None or pd.isna(caution_flags):
+        return ""
+    labels = {
+        "투자경고": "투경",
+        "투자주의": "투주",
+        "단기과열": "과열",
+    }
+    flags = [part.strip() for part in str(caution_flags).split(",") if part.strip()]
+    return " ".join(f":orange[{labels.get(flag, flag)}]" for flag in flags)
+
+
 def _sort_tickers_stale_first(tickers: list[str], normalize_upper: bool) -> list[str]:
     last_dates = cache_get_all_last_price_dates()
 
@@ -368,7 +381,7 @@ def _render_market_card(spec: dict, settings: tuple) -> None:
           <div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;'>
             {_stat_block(f'Top {top_n} 상승', adv, COLOR_PROFIT, '개')}
             {_stat_block(f'Top {top_n} 하락', dec, COLOR_LOSS, '개')}
-            {_stat_block('평균 RS', f'{avg_rs:.2f}', '#191f28')}
+            {_stat_block('평균 RS', f'{avg_rs * 100:+.2f}%p', '#191f28')}
           </div>
         </div>
         """,
@@ -547,7 +560,10 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
             "RS 계산 기간 (일)",
             min_value=5, max_value=60, value=20, step=1,
             key=_key(spec, "rs_period"),
-            help="RS = (종목 N일 수익률) / (지수 N일 수익률)",
+            help=(
+                "RS = 종목 N일 수익률 - 지수 N일 수익률. "
+                "양수이면 지수보다 강합니다."
+            ),
         )
         top_n = st.slider(
             "표시 개수 (Top N)",
@@ -873,7 +889,7 @@ def _render_rs_header(
     cols = st.columns([2, 1.4])
     with cols[0]:
         st.markdown(f"### RS Top {top_n}")
-        st.caption(f"RS = (종목 {rs_period}일 수익률) / (지수 {rs_period}일 수익률)")
+        st.caption(f"RS = 종목 {rs_period}일 수익률 - 지수 {rs_period}일 수익률")
     with cols[1]:
         if info is None:
             return
@@ -1067,7 +1083,11 @@ def _render_ticker_search_result(
             return na
 
     price_str = spec["price_chart_fmt"](last_price)
-    rs_str = _cfmt(rs_val, ".3f") if not (isinstance(rs_val, float) and rs_val != rs_val) else "—"
+    rs_str = (
+        _cfmt(rs_val * 100.0, "+.2f") + "%p"
+        if not (isinstance(rs_val, float) and rs_val != rs_val)
+        else "—"
+    )
     rsw_str = _cfmt(rs_w, ".3f") if not (isinstance(rs_w, float) and rs_w != rs_w) else "—"
     ret_str = (f"{ret_n*100:+.2f}%" if not (isinstance(ret_n, float) and ret_n != ret_n) else "—")
     ret5_str = (f"{ret_5*100:+.2f}%" if not (isinstance(ret_5, float) and ret_5 != ret_5) else "—")
@@ -1119,7 +1139,7 @@ def _render_ticker_search_result(
       <div style="font-size:1.1rem; font-weight:700; color:{price_color};">{price_str}</div>
     </div>
     <div>
-      <div style="font-size:0.72rem; color:{COLOR_MUTED}; margin-bottom:2px;">RS ({rs_period}일, {index_display})</div>
+      <div style="font-size:0.72rem; color:{COLOR_MUTED}; margin-bottom:2px;">RS 초과수익률 ({rs_period}일, {index_display})</div>
       <div style="font-size:1.05rem; font-weight:600; color:{COLOR_TEXT};">{rs_str}</div>
     </div>
     <div>
@@ -1183,7 +1203,9 @@ def _render_ranking_table(
             key=_key(spec, "search_ticker"),
         )
 
-    sort_col = "rs_weighted" if sort_choice == "RS가중" else "rs"
+    # 일반 RS 순위는 요구사항을 직접 보장하도록 N일 수익률 자체로 정렬한다.
+    # 동일 지수의 초과수익률을 빼므로 RS 순서와도 같다.
+    sort_col = "rs_weighted" if sort_choice == "RS가중" else "return_n"
 
     # 검색 결과 카드 (순위 테이블 위)
     if search_input and search_input.strip():
@@ -1216,7 +1238,7 @@ def _render_ranking_table(
         ("종목명", 2.2),
         ("현재가", 1.1),
         ("추이", 0.9),
-        ("RS", 0.7),
+        ("RS(%p)", 0.8),
         ("RS가중", 0.85),
         (f"{rs_period}일 수익률", 1.15),
     ]
@@ -1238,7 +1260,7 @@ def _render_ranking_table(
             else:
                 align = "right"
             is_active = (
-                (sort_col == "rs" and label == "RS")
+                (sort_col == "return_n" and label == "RS(%p)")
                 or (sort_col == "rs_weighted" and label == "RS가중")
             )
             style = f"text-align:{align};"
@@ -1268,7 +1290,7 @@ def _render_ranking_table(
                 ticker,
                 name_display,
                 spec["price_chart_fmt"](r["last_price"]),
-                _fmt_cell(r.get("rs"), "%.3f"),
+                _fmt_cell(r.get("rs") * 100.0, "%+.2f") if pd.notna(r.get("rs")) else "—",
                 _fmt_cell(rs_w, "%.3f") if pd.notna(rs_w) else "—",
                 _fmt_cell(return_n * 100.0, "%+.2f%%"),
             ]
@@ -1506,10 +1528,6 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
         tickers_tuple=tuple(tickers),
     )
 
-    idx_return = None
-    if not ranked.empty and "index_return_n" in ranked.columns:
-        idx_return = float(ranked["index_return_n"].iloc[0])
-
     col_left, col_right = st.columns([1.2, 1], gap="large")
     index_display = _index_display_name(index_code)
 
@@ -1552,17 +1570,10 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
                 )
             else:
                 st.warning(
-                    f"{index_display} {rs_period}일 변동폭이 너무 작아 "
-                    "RS 계산이 불가합니다. 기간을 늘려보세요."
+                    f"{index_display} 기준으로 RS 계산 가능한 종목이 없습니다. "
+                    "종목 및 지수 시세 캐시를 새로고침해주세요."
                 )
             return
-
-        if idx_return is not None and idx_return < 0:
-            st.info(
-                "⚠️ 기준 지수 수익률이 **음수**입니다. "
-                "이때 RS는 '지수보다 덜 떨어졌거나 더 오른 종목'을 의미하며, "
-                "양수 장에서의 RS 해석과 반대가 될 수 있습니다."
-            )
 
         selected_ticker = _render_ranking_table(spec, ranked, rs_period, index_code)
         if selected_ticker is not None:

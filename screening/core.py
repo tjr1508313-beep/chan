@@ -5,8 +5,9 @@
     - `@st.cache_data` 사용 시에도 동일 접두사 유지
 
 핵심 개념:
-    ⚠️ RS ≠ RSI(상대강도지수). 여기서 RS는 **지수 대비 종목 수익률 비율**.
-    MVP 공식: `RS = (종목 N일 수익률) / (지수 N일 수익률)`
+    ⚠️ RS ≠ RSI(상대강도지수). 여기서 RS는 **지수 대비 초과수익률**.
+    공식: `RS = 종목 N일 수익률 - 지수 N일 수익률`
+    기준지수와 수익률이 같으면 0, 더 강하면 양수, 더 약하면 음수.
     기본 기간 20일, 사용자 조정 가능 (5~60일).
 
 필터 조건 (모두 AND, 순서 고정):
@@ -48,9 +49,6 @@ from .cache import (
 )
 from .china_filter import is_china_ticker
 
-
-# 지수 수익률이 0 에 매우 가까우면 RS 극단값 방지를 위해 NaN 처리.
-_RS_EPSILON: float = 1e-9
 
 # Minervini 가중 RS 기간·가중치 (63/126/189/252 영업일)
 _WEIGHTED_PERIODS: list[tuple[int, float]] = [
@@ -528,13 +526,17 @@ def _period_return(series: pd.Series, period: int) -> float:
 
 
 def _index_return(index_prices: pd.DataFrame, period: int) -> float:
-    """지수 N일 수익률. epsilon 이하이면 NaN (RS 극단값 방지)."""
+    """지수 N일 수익률."""
     if index_prices is None or index_prices.empty or "Close" not in index_prices.columns:
         return float("nan")
-    r = _period_return(index_prices["Close"], period)
-    if pd.isna(r) or abs(r) < _RS_EPSILON:
+    return _period_return(index_prices["Close"], period)
+
+
+def _relative_strength(stock_return: float, index_return: float) -> float:
+    """지수 대비 초과수익률. 지수와 같은 수익률이면 0."""
+    if pd.isna(stock_return) or pd.isna(index_return):
         return float("nan")
-    return r
+    return float(stock_return) - float(index_return)
 
 
 def screen_calc_rs(
@@ -544,7 +546,7 @@ def screen_calc_rs(
 ) -> pd.Series:
     """상대강도(RS)를 계산한다.
 
-    RS = (종목 N일 수익률) / (지수 N일 수익률)
+    RS = 종목 N일 수익률 - 지수 N일 수익률
 
     Args:
         prices: 종목 일봉 DataFrame. 두 형태 모두 지원:
@@ -558,11 +560,6 @@ def screen_calc_rs(
         `.dropna().sort_values(ascending=False)` 로 랭킹.
 
         단일 종목 입력 시 길이 1, 이름 없는 Series 반환.
-
-    주의:
-        지수 수익률이 음수일 때 종목도 음수면 RS > 0 이 된다(의도된 동작).
-        다만 지수가 음수/양수 경계로 뒤바뀌면 순위도 역전될 수 있으니
-        UI 에서 해석에 주의.
     """
     idx_return = _index_return(index_prices, period)
 
@@ -572,17 +569,14 @@ def screen_calc_rs(
     is_single = "Close" in prices.columns
     if is_single:
         stock_return = _period_return(prices["Close"], period)
-        rs = float("nan") if pd.isna(idx_return) else stock_return / idx_return
+        rs = _relative_strength(stock_return, idx_return)
         return pd.Series([rs], dtype=float)
 
     # wide: columns=티커, 값=close
     rs_map: dict[str, float] = {}
     for col in prices.columns:
         stock_return = _period_return(prices[col], period)
-        if pd.isna(idx_return) or pd.isna(stock_return):
-            rs_map[str(col)] = float("nan")
-        else:
-            rs_map[str(col)] = stock_return / idx_return
+        rs_map[str(col)] = _relative_strength(stock_return, idx_return)
     return pd.Series(rs_map, dtype=float)
 
 
@@ -597,7 +591,7 @@ def screen_filter_by_index_lag(
 ) -> tuple[list[str], int]:
     """종목 캐시 마지막일이 지수 마지막일과 `max_lag_days` 초과로 떨어진 티커 제외.
 
-    RS = (종목 N일 수익률) / (지수 N일 수익률) 은 두 시계열이 같은 시점을
+    RS = 종목 N일 수익률 - 지수 N일 수익률 은 두 시계열이 같은 시점을
     바라볼 때만 의미가 있다. 종목 데이터가 지수보다 뒤처져 있으면 분자/분모의
     기준일이 어긋나 RS 가 시간 정합성을 잃는다. 이 함수는 그런 종목을 사전 제거.
 
@@ -673,9 +667,9 @@ def screen_rank_rs(
         top_n: 상위 N개.
 
     Returns:
-        columns=_RANK_DF_COLUMNS 의 DataFrame. RS 내림차순, rank 1부터.
-        데이터 부족 종목은 NaN 제거. 지수 수익률이 epsilon 근처이면
-        모든 RS 가 NaN → 빈 DataFrame.
+        columns=_RANK_DF_COLUMNS 의 DataFrame. 종목 N일 수익률 내림차순, rank 1부터.
+        동일 지수의 초과수익률을 빼므로 이 순서는 RS 내림차순과 동일하다.
+        데이터 부족 종목은 NaN 제거.
     """
     # 여유 +10 영업일 (주말/공휴일 흡수). 가중 RS 는 252+1일이 필요하므로 그 이상 확보.
     days = max(period + 10, _WEIGHTED_MIN_ROWS + 10)
@@ -693,10 +687,13 @@ def screen_rank_rs(
     ):
         joined = cached_metrics.join(cached_returns.rename("return_n"), how="inner")
         if not joined.empty:
-            joined["rs"] = joined["return_n"] / idx_return
+            joined["rs"] = joined["return_n"].map(
+                lambda stock_return: _relative_strength(stock_return, idx_return)
+            )
             joined["index_return_n"] = float(idx_return)
             joined = joined.rename(columns={"rs_weighted": "rs_weighted"})
-            joined = joined.sort_values("rs", ascending=False, kind="mergesort").head(top_n)
+            joined = joined.dropna(subset=["rs"])
+            joined = joined.sort_values("return_n", ascending=False, kind="mergesort").head(top_n)
             joined = joined.reset_index().rename(columns={"index": "ticker"})
             joined.insert(0, "rank", range(1, len(joined) + 1))
             return joined[_RANK_DF_COLUMNS]
@@ -718,7 +715,9 @@ def screen_rank_rs(
         stock_return = _period_return(prices["Close"], period)
         if pd.isna(idx_return) or pd.isna(stock_return):
             continue
-        rs = stock_return / idx_return
+        rs = _relative_strength(stock_return, idx_return)
+        if pd.isna(rs):
+            continue
 
         last_price = _last_close(prices)
         # 5일선 이탈 여부: 마지막 종가 < 5일 SMA. 데이터 부족이면 False.
@@ -747,7 +746,7 @@ def screen_rank_rs(
         return pd.DataFrame(columns=_RANK_DF_COLUMNS)
 
     df = pd.DataFrame(rows)
-    df = df.sort_values("rs", ascending=False, kind="mergesort").reset_index(drop=True)
+    df = df.sort_values("return_n", ascending=False, kind="mergesort").reset_index(drop=True)
     df = df.head(top_n).copy()
     df.insert(0, "rank", range(1, len(df) + 1))
     return df[_RANK_DF_COLUMNS]
