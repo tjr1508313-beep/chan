@@ -12,6 +12,9 @@
         PK: ticker
     index_prices (index_code, date, close)
         PK: (index_code, date)
+    index_chart_snapshot (index_code, date, open, high, low, close)
+        PK: (index_code, date)
+        - 첫 화면용 최근 110개 완성 봉. 갱신 시 가장 늦은 날짜 1개 제외.
 
 이 모듈은 **순수 SQLite 영속 저장소**이다.
     - `streamlit` import 금지 (`@st.cache_data` 는 상위 UI 레이어에서 부착)
@@ -111,6 +114,18 @@ CREATE TABLE IF NOT EXISTS universe (
 )
 """
 
+_DDL_INDEX_CHART_SNAPSHOT = """
+CREATE TABLE IF NOT EXISTS index_chart_snapshot (
+    index_code TEXT NOT NULL,
+    date       TEXT NOT NULL,
+    open       REAL,
+    high       REAL,
+    low        REAL,
+    close      REAL,
+    PRIMARY KEY (index_code, date)
+)
+"""
+
 # 화면 진입 때마다 원시 일봉을 다시 집계하지 않도록 저장하는 표시용 스냅샷.
 _DDL_SCREENING_METRICS = """
 CREATE TABLE IF NOT EXISTS screening_metrics (
@@ -147,6 +162,7 @@ def init_cache() -> None:
         conn.execute(_DDL_PRICES)
         conn.execute(_DDL_METADATA)
         conn.execute(_DDL_INDEX_PRICES)
+        conn.execute(_DDL_INDEX_CHART_SNAPSHOT)
         conn.execute(_DDL_UNIVERSE)
         conn.execute(_DDL_SCREENING_METRICS)
         conn.execute(_DDL_STOCK_RETURNS)
@@ -821,3 +837,80 @@ def cache_get_last_index_date(index_code: str) -> str | None:
     if row is None or row[0] is None:
         return None
     return str(row[0])
+
+
+def cache_save_index_chart_snapshot(
+    index_code: str, df: pd.DataFrame, days: int = 110
+) -> int:
+    """첫 화면용 지수 OHLC 스냅샷을 갱신한다.
+
+    기존 스냅샷과 새로 받은 지수 일봉을 병합한 뒤 가장 늦은 날짜 1개를
+    미완성 가능 봉으로 제외하고 최근 ``days`` 개만 저장한다.
+    """
+    if df is None or df.empty or days <= 0:
+        return 0
+
+    required = ["Open", "High", "Low", "Close"]
+    if any(col not in df.columns for col in required):
+        return 0
+
+    code = index_code.strip()
+    existing = cache_load_index_chart_snapshot(code)
+    incoming = df[required].copy()
+    combined = incoming if existing.empty else pd.concat([existing, incoming])
+    combined.index = pd.to_datetime(combined.index).tz_localize(None)
+    combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+    combined = combined.apply(pd.to_numeric, errors="coerce").dropna(subset=required)
+    if len(combined) <= 1:
+        return 0
+
+    snapshot = _repair_ohlc(combined.iloc[:-1].tail(days).copy())
+    norm = _normalize_date_index(snapshot)
+    rows = [
+        (
+            code,
+            str(date_str),
+            float(row["Open"]),
+            float(row["High"]),
+            float(row["Low"]),
+            float(row["Close"]),
+        )
+        for date_str, row in norm.iterrows()
+    ]
+    with _connect() as conn:
+        conn.execute(_DDL_INDEX_CHART_SNAPSHOT)
+        conn.execute("DELETE FROM index_chart_snapshot WHERE index_code = ?", (code,))
+        conn.executemany(
+            "INSERT INTO index_chart_snapshot "
+            "(index_code, date, open, high, low, close) VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+    return len(rows)
+
+
+def cache_load_index_chart_snapshot(
+    index_code: str, days: int | None = None
+) -> pd.DataFrame:
+    """첫 화면용으로 미리 계산된 지수 OHLC 스냅샷 조회."""
+    code = index_code.strip()
+    with _connect() as conn:
+        try:
+            df = pd.read_sql_query(
+                "SELECT date, open, high, low, close FROM index_chart_snapshot "
+                "WHERE index_code = ? ORDER BY date ASC",
+                conn,
+                params=(code,),
+            )
+        except sqlite3.OperationalError:
+            return pd.DataFrame(columns=["Open", "High", "Low", "Close"])
+
+    if df.empty:
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close"])
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date").sort_index().rename(
+        columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"}
+    )
+    df = _repair_ohlc(df)
+    if days is not None and days > 0:
+        df = df.tail(days)
+    return df

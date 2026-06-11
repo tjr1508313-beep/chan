@@ -51,8 +51,12 @@ C:\스크리닝\
 
 ### `screening/cache.py` (SQLite — 미국+한국 공유)
 - DB: `screening_cache.db` (프로젝트 루트 고정)
-- 테이블: `prices` (+traded_value 자동 — 미국 USD / 한국 KRW 거래대금), `metadata`, `index_prices`, `settings`
+- 테이블: `prices` (+traded_value 자동 — 미국 USD / 한국 KRW 거래대금), `metadata`,
+  `index_prices`, `index_chart_snapshot`, `universe`, `screening_metrics`, `stock_returns`
 - CRUD: `cache_save_prices/load_prices/save_meta/load_meta/save_index/load_index`
+- 첫 화면 지수 차트: `cache_save_index_chart_snapshot/load_index_chart_snapshot`
+  - 기존 스냅샷 + 신규 OHLC 병합 후 가장 늦은 날짜 1개 제외
+  - 최근 완성 봉 110개만 저장하므로 사이트 진입 시 원시 지수 일봉 집계 없음
 - 증분 커서: `cache_get_last_price_date`, `cache_get_last_index_date`
 - 일괄 조회: `cache_get_all_last_price_dates()` — 한 SQL 로 모든 ticker 마지막일 (stale-first 정렬용)
 - **신규** (2026-05-06): `cache_delete_prices(ticker)` — 분할 발생 시 옛 미조정 가격 통째로 삭제
@@ -84,6 +88,7 @@ C:\스크리닝\
 ### `screening/ui.py` (UI)
 - `render_screening_page()` — 미국/한국 한 화면 위·아래 배치 진입점
 - spec dict 기반 공통화 (`_US_SPEC`, `_KR_SPEC`)
+- 첫 화면 시장 요약 카드 아래에 선택 지수 최근 110일 완성 봉 미니 캔들 차트 표시
 - 공유 헬퍼: `_render_screening_section`, `_render_sidebar`, `_render_rs_header`,
   `_render_pipeline_badge`, `_render_filter_summary`, `_render_ranking_table`,
   `_render_chart`, `_render_chart_metrics`, `_sort_tickers_stale_first`
@@ -117,7 +122,8 @@ C:\스크리닝\
 ## 알려진 이슈 / 제약
 1. **yfinance 레이트 리밋 불안정** — 미국 3,800종목 전체 새로고침은 수십 분. 사이드바 `max_tickers` 제한 필수 (기본 200)
 2. **`yf.Ticker().info` 느림** (요청당 0.3~1초) → 메타 TTL 7일
-3. **장중 호출 시 당일 미완성 봉** — 변동성 필터 오작동 가능. 배치는 장 마감 후 권장
+3. **장중 호출 시 당일 미완성 종목 봉** — 종목 변동성 필터 오작동 가능. 배치는 장 마감 후 권장.
+   첫 화면 지수 차트는 배치가 가장 늦은 날짜 봉을 제외해 별도 보호.
 4. **한국 위험종목 필터 보류** — KRX 공시 익명 차단, pykrx 인증 필요, DART API 키 미설정. 사이드바 체크박스만 살아있음 (실제 적용 안 됨)
 5. **한국 corporate action 자동 감지 미구현** — FDR 에 splits API 없음. 사용자가 force 수동 또는 stale-first 정렬에 의지 (미국은 2026-05-06 자동화 완료)
 6. ~~**종목/지수 마지막일 미스매치 시 RS 시간 정합성 잃음**~~ — `screen_filter_by_index_lag` 로 해결됨 (2026-05-06)

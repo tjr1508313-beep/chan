@@ -196,27 +196,35 @@ def screen_refresh_index_kr(
     """
     cache.init_cache()
     try:
+        chart_ready = len(cache.cache_load_index_chart_snapshot(index_code, days=110)) >= 110
         last_before: str | None = None
         if not force:
             last_before = cache.cache_get_last_index_date(index_code)
             if last_before is not None:
                 gap = _days_since(last_before)
-                if gap <= 0:
+                if gap <= 0 and chart_ready:
                     return {"updated": 0, "skipped": 1, "failed": []}
-                fetch_days = min(days, max(5, int(gap * 1.1) + 3))
+                fetch_days = (
+                    min(days, max(5, int(gap * 1.1) + 3))
+                    if chart_ready
+                    else max(days, 111)
+                )
             else:
-                fetch_days = days
+                fetch_days = max(days, 111)
         else:
-            fetch_days = days
+            fetch_days = max(days, 111)
 
         df = kr_data.kr_load_index(index_code, fetch_days)
         if df is None or df.empty:
             return {"updated": 0, "skipped": 0, "failed": [index_code]}
 
         cache.cache_save_index(index_code, df)
+        chart_rows = cache.cache_save_index_chart_snapshot(index_code, df, days=110)
         last_after = cache.cache_get_last_index_date(index_code)
-        if last_before is not None and last_after == last_before:
+        if last_before is not None and last_after == last_before and chart_ready:
             return {"updated": 0, "skipped": 1, "failed": []}
+        if chart_rows == 0 and not chart_ready:
+            return {"updated": 0, "skipped": 0, "failed": [index_code]}
         return {"updated": 1, "skipped": 0, "failed": []}
     except Exception:
         return {"updated": 0, "skipped": 0, "failed": [index_code]}

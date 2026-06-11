@@ -9,6 +9,7 @@
 GitHub Actions  (월~금)
    KR  15:40 KST  →  scripts/refresh_cache.py --market kr
    US  07:00 KST  →  scripts/refresh_cache.py --market us
+        → 지수 OHLC 최근 110개 완성 봉 스냅샷도 미리 계산
         ↓
    data-cache 브랜치(orphan)에 screening_cache.db.gz, last_updated.txt 강제 푸시
         ↓
@@ -142,6 +143,10 @@ Content-Type: application/json
 ## 갱신 범위
 
 - ✅ 지수 시세 (`^IXIC`, `^GSPC`, `KS11`, `KQ11`)
+- ✅ 첫 화면 지수 차트 스냅샷 (`index_chart_snapshot`)
+  - 기존 스냅샷과 신규 OHLC를 병합
+  - 가장 늦은 날짜 봉 1개를 제외하고 최근 110개만 저장
+  - 앱 화면은 이 스냅샷만 읽으므로 사이트 진입 시 차트 데이터 계산 없음
 - ✅ 구성종목 시세 (NASDAQ + S&P500 / KOSPI + KOSDAQ)
 - ✅ **메타데이터** (시총·이름·섹터·중국기업 여부) — TTL 7일 증분 갱신 (보통은 skip, 만료/신규만 외부 호출)
 

@@ -264,6 +264,10 @@ def _apply_remote(tmp_remote: Path) -> tuple[str, int]:
             tables = [r[0] for r in cur.fetchall()]
             merged_rows = 0
             for t in tables:
+                # 화면용 지수 차트는 원격 배치가 통째로 계산한 최신 110봉만 유지.
+                # 로컬의 오래된 행을 합치면 스냅샷 제한과 최신봉 제외 규칙이 깨진다.
+                if t == "index_chart_snapshot":
+                    continue
                 # 원격에 없는 테이블은 스킵
                 main_exists = conn.execute(
                     "SELECT name FROM main.sqlite_master WHERE type='table' AND name=?", (t,)

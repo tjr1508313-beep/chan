@@ -39,6 +39,7 @@ from .batch_kr import (
 )
 from .cache import (
     cache_get_all_last_price_dates,
+    cache_load_index_chart_snapshot,
     cache_load_index,
     cache_load_meta,
     cache_load_prices,
@@ -152,6 +153,11 @@ def ui_load_ranked_df(
 @st.cache_data(ttl=300, show_spinner=False)
 def ui_load_chart_df(ticker: str, days: int) -> pd.DataFrame:
     return cache_load_prices(ticker, days=days)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def ui_load_index_chart_df(index_code: str) -> pd.DataFrame:
+    return cache_load_index_chart_snapshot(index_code, days=110)
 
 
 # ─── 공통 헬퍼 ──────────────────────────────────────────────────────
@@ -386,6 +392,75 @@ def _render_market_card(spec: dict, settings: tuple) -> None:
         </div>
         """,
         unsafe_allow_html=True,
+    )
+    _render_market_index_chart(spec, index_code)
+
+
+def _render_market_index_chart(spec: dict, index_code: str) -> None:
+    """카드 너비 안에 미리 계산된 최근 110일 지수 완성 봉을 표시."""
+    df = ui_load_index_chart_df(index_code)
+    if df is None or df.empty:
+        st.caption("지수 차트는 다음 데이터 새로고침 후 표시됩니다.")
+        return
+
+    view_times = df.index.tz_localize("UTC")
+    candle_df = pd.DataFrame(
+        {
+            "time": view_times,
+            "open": df["Open"].values,
+            "high": df["High"].values,
+            "low": df["Low"].values,
+            "close": df["Close"].values,
+        }
+    ).dropna()
+    if candle_df.empty:
+        return
+
+    ohlc = candle_df[["open", "high", "low", "close"]]
+    candle_df["high"] = ohlc.max(axis=1)
+    candle_df["low"] = ohlc.min(axis=1)
+
+    precision = int(spec.get("chart_price_precision", 2))
+    min_move = float(spec.get("chart_price_min_move", 0.01))
+    candle = CandlestickSeries(
+        data=candle_df,
+        column_mapping={
+            "time": "time",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+        },
+        pane_id=0,
+    )
+    candle.up_color = _COLOR_UP
+    candle.down_color = _COLOR_DOWN
+    candle.border_up_color = _COLOR_UP
+    candle.border_down_color = _COLOR_DOWN
+    candle.wick_up_color = _COLOR_UP
+    candle.wick_down_color = _COLOR_DOWN
+    candle.price_format = PriceFormatOptions(
+        type="price", precision=precision, min_move=min_move
+    )
+
+    chart = Chart(
+        series=[candle],
+        options=ChartOptions(
+            height=190,
+            layout=LayoutOptions(
+                text_color=COLOR_MUTED,
+                font_size=10,
+                font_family=(
+                    "Pretendard, -apple-system, BlinkMacSystemFont, "
+                    "'Segoe UI', Roboto, sans-serif"
+                ),
+            ),
+            time_scale=TimeScaleOptions(time_visible=False, seconds_visible=False),
+        ),
+    )
+    chart.render(key=f"lwc_market_index_{spec['code']}_{index_code}")
+    st.caption(
+        f"최근 {len(df)}일 완성 봉 · 마지막 봉 {df.index[-1].strftime('%Y-%m-%d')}"
     )
 
 
@@ -827,6 +902,7 @@ def _render_refresh_result(spec: dict, job: dict) -> None:
     if not job.get("cache_cleared"):
         ui_load_ranked_df.clear()
         ui_load_chart_df.clear()
+        ui_load_index_chart_df.clear()
         job["cache_cleared"] = True
 
     if job.get("error"):
