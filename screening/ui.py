@@ -13,8 +13,10 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -1691,19 +1693,35 @@ def _generate_namuh_watchlist_csv(ranked: pd.DataFrame, cfg: dict) -> bytes:
     return ("\n".join(lines) + "\n").encode("euc-kr", errors="replace")
 
 
+def _is_local_run() -> bool:
+    """Streamlit Cloud 여부 판별 — 로컬이면 True."""
+    return not os.environ.get("STREAMLIT_SHARING_MODE") and not Path("/mount/src").exists()
+
+
 def _render_namuh_download(spec: dict, ranked: pd.DataFrame) -> None:
     cfg = _NAMUH_CONFIG.get(spec["code"])
     if cfg is None:
         return
     csv_bytes = _generate_namuh_watchlist_csv(ranked, cfg)
-    st.download_button(
-        label=f"📥 나무증권 관심종목 다운로드 ({cfg['filename']})",
-        data=csv_bytes,
-        file_name=cfg["filename"],
-        mime="text/csv",
-        key=f"scr_{spec['code']}_namuh_download",
-        help="HTS → 관심종목 → 가져오기에서 이 파일을 선택하세요.",
-    )
+
+    if _is_local_run():
+        save_path = Path.home() / "Documents" / cfg["filename"]
+        if st.button(
+            label=f"📥 나무증권 관심종목 업데이트 ({cfg['filename']})",
+            key=f"scr_{spec['code']}_namuh_save",
+            help=f"저장 위치: {save_path}",
+        ):
+            save_path.write_bytes(csv_bytes)
+            st.success(f"업데이트 완료 → {save_path}")
+    else:
+        st.download_button(
+            label=f"📥 나무증권 관심종목 다운로드 ({cfg['filename']})",
+            data=csv_bytes,
+            file_name=cfg["filename"],
+            mime="text/csv",
+            key=f"scr_{spec['code']}_namuh_download",
+            help="HTS → 관심종목 → 가져오기에서 이 파일을 선택하세요.",
+        )
 
 
 # ─── 퍼블릭 엔트리 ─────────────────────────────────────────────────
