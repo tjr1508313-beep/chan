@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 from pathlib import Path
@@ -1699,9 +1698,10 @@ def _render_namuh_download(spec: dict, ranked: pd.DataFrame) -> None:
         return
     csv_bytes = _generate_namuh_watchlist_csv(ranked, cfg)
 
-    import sys
-    if sys.platform == "win32":
-        # 로컬 Windows 실행 — 스크리닝 폴더에 직접 덮어쓰기
+    # Streamlit Cloud는 /mount/src/ 아래에 앱을 마운트함
+    is_local = not str(Path(__file__).resolve()).startswith("/mount/src")
+    if is_local:
+        # 로컬 실행 — 스크리닝 폴더에 직접 덮어쓰기
         save_path = Path(__file__).parent.parent / cfg["filename"]
         if st.button(
             label=f"📥 나무증권 관심종목 업데이트 ({cfg['filename']})",
@@ -1711,7 +1711,7 @@ def _render_namuh_download(spec: dict, ranked: pd.DataFrame) -> None:
             save_path.write_bytes(csv_bytes)
             st.success(f"업데이트 완료 → {save_path}")
     else:
-        # Streamlit Cloud(Linux) — 브라우저 다운로드
+        # Streamlit Cloud — 브라우저 다운로드
         st.download_button(
             label=f"📥 나무증권 관심종목 다운로드 ({cfg['filename']})",
             data=csv_bytes,
