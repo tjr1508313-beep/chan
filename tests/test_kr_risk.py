@@ -1,38 +1,39 @@
+import pandas as pd
 import screening.kr_risk as kr_risk
 
 
-def test_classify_merges_designations():
-    raw = {
-        "관리": ["005930"],
-        "거래정지": ["111111"],
-        "정리매매": ["222222"],
-        "투자경고": ["005930", "333333"],
-        "투자주의": ["444444"],
-        "단기과열": ["005930"],
-    }
-    out = kr_risk._classify(raw)
-    assert out["005930"]["is_risk"] is True
-    assert set(out["005930"]["labels"]) == {"관리", "투자경고", "단기과열"}
-    assert out["111111"]["is_risk"] is True
-    assert out["222222"]["is_risk"] is True
-    assert out["333333"]["is_risk"] is False
-    assert out["333333"]["labels"] == ["투자경고"]
-    assert out["444444"]["is_risk"] is False
+def test_fetch_returns_empty_on_fdr_error(monkeypatch):
+    """FDR 조회 실패 시 빈 dict 반환 (graceful degrade)."""
+    import FinanceDataReader as fdr
 
-
-def test_fetch_returns_empty_without_keys(monkeypatch):
-    monkeypatch.delenv("LS_APP_KEY", raising=False)
-    monkeypatch.delenv("LS_APP_SECRET", raising=False)
-    assert kr_risk.kr_fetch_risk_flags() == {}
-
-
-def test_fetch_returns_empty_on_api_error(monkeypatch):
-    monkeypatch.setenv("LS_APP_KEY", "k")
-    monkeypatch.setenv("LS_APP_SECRET", "s")
-    monkeypatch.setattr(kr_risk, "_get_token", lambda *a, **k: "dummy-token")
-
-    def boom(token):
+    def boom(market):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr(kr_risk, "_collect_raw_designations", boom)
+    monkeypatch.setattr(fdr, "StockListing", boom)
     assert kr_risk.kr_fetch_risk_flags() == {}
+
+
+def test_fetch_classifies_dept_correctly(monkeypatch):
+    """Dept 컬럼 값에 따라 is_risk / labels 분류가 올바른지 확인."""
+    import FinanceDataReader as fdr
+
+    mock_df = pd.DataFrame([
+        {"Code": "000020", "Dept": "관리종목(소속부없음)"},
+        {"Code": "005930", "Dept": ""},                     # 정상 종목 → 제외
+        {"Code": "123456", "Dept": "투자주의환기종목(소속부없음)"},
+        {"Code": "999999", "Dept": "우량기업부"},            # 정상 KOSDAQ → 제외
+    ])
+    monkeypatch.setattr(fdr, "StockListing", lambda market: mock_df)
+
+    result = kr_risk.kr_fetch_risk_flags()
+
+    assert "000020" in result
+    assert result["000020"]["is_risk"] is True
+    assert "관리종목" in result["000020"]["labels"]
+
+    assert "123456" in result
+    assert result["123456"]["is_risk"] is False
+    assert "투자주의환기" in result["123456"]["labels"]
+
+    assert "005930" not in result
+    assert "999999" not in result
