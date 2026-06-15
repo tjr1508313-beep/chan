@@ -1704,7 +1704,7 @@ def _render_namuh_download(spec: dict, ranked: pd.DataFrame) -> None:
         # 로컬 실행 — 스크리닝 폴더에 직접 덮어쓰기
         save_path = Path(__file__).parent.parent / cfg["filename"]
         if st.button(
-            label=f"📥 나무증권 관심종목 업데이트 ({cfg['filename']})",
+            label=f"관심 종목 업데이트 ({cfg['filename']})",
             key=f"scr_{spec['code']}_namuh_save",
             help=f"저장 위치: {save_path}",
         ):
