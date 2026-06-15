@@ -23,4 +23,5 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 ```
 
 4. 변경된 파일 모두 스테이징 후 커밋 (단, `.env`, 비밀번호, API 키 파일은 절대 포함하지 말 것)
-5. 커밋 완료 후 `git log --oneline -3` 으로 결과 확인
+5. 커밋 완료 후 `git push origin main` 으로 GitHub에 푸시
+6. `git log --oneline -3` 으로 최종 결과 확인
