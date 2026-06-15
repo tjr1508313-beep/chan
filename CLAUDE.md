@@ -34,6 +34,12 @@
 GitHub Actions가 평일 캐시 DB를 자동 갱신 후 `data-cache` 브랜치에 push. 갱신 범위 = 지수 + 시세 + 메타(TTL 7일 증분) + 첫 화면 지수 차트 스냅샷.
 로컬 앱 시작 시 `cache_sync.py`가 변경분만 자동 다운로드. 세팅: [docs/auto-refresh-setup.md](docs/auto-refresh-setup.md)
 
+### 나무증권 관심종목 파일
+- 로컬 앱: 프로젝트 폴더의 `02_*.csv` / `04_*.csv`를 직접 덮어씀
+- Streamlit Cloud: Google Apps Script를 통해 Google Drive 동기화 폴더의 CSV를 교체
+- Drive 설정이 없거나 실패하면 기존 브라우저 다운로드 버튼 사용
+- 설정: [docs/google-drive-watchlist-setup.md](docs/google-drive-watchlist-setup.md)
+
 ## 기술 스택
 - Python / Streamlit
 - 데이터 소스: 미국 = `yfinance`, 한국 = `FinanceDataReader`

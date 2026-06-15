@@ -61,6 +61,7 @@ from .core import (
 )
 from .data import us_get_nasdaq_tickers, us_get_sp500_tickers
 from .data_kr import kr_get_kosdaq_tickers, kr_get_kospi_tickers
+from .drive_upload import drive_upload_configured, upload_watchlist_to_drive
 from .theme import (
     COLOR_BORDER,
     COLOR_CARD,
@@ -1711,7 +1712,34 @@ def _render_namuh_download(spec: dict, ranked: pd.DataFrame) -> None:
             save_path.write_bytes(csv_bytes)
             st.success(f"업데이트 완료 → {save_path}")
     else:
-        # Streamlit Cloud — 브라우저 다운로드
+        # Streamlit Cloud — Drive 동기화 우선, 브라우저 다운로드는 폴백으로 유지
+        try:
+            drive_url = str(st.secrets.get("google_drive_upload_url", "") or "")
+            drive_token = str(st.secrets.get("google_drive_upload_token", "") or "")
+        except Exception:
+            drive_url = ""
+            drive_token = ""
+
+        if drive_upload_configured(drive_url, drive_token):
+            if st.button(
+                label=f"Google Drive 관심 종목 업데이트 ({cfg['filename']})",
+                key=f"scr_{spec['code']}_namuh_drive",
+                help="Google Drive의 같은 이름 파일을 덮어씁니다.",
+            ):
+                with st.spinner("Google Drive 업데이트 중..."):
+                    result = upload_watchlist_to_drive(
+                        cfg["filename"],
+                        csv_bytes,
+                        endpoint=drive_url,
+                        token=drive_token,
+                    )
+                if result.ok:
+                    st.success(result.message)
+                else:
+                    st.error(result.message)
+        else:
+            st.caption("Google Drive 자동 업데이트 미설정 — 아래 다운로드 버튼을 사용하세요.")
+
         st.download_button(
             label=f"📥 나무증권 관심종목 다운로드 ({cfg['filename']})",
             data=csv_bytes,

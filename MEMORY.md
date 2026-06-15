@@ -143,6 +143,16 @@ C:\스크리닝\
 5. **Phase 2 며칠 사용 후 피드백 모아 → Phase 3 코인 착수**
 6. **(보류) 클라우드 호스팅** — Oracle/Fly 모두 막힘. 무료+영속+24/7 옵션 사라짐. 비번 코드는 미리 둠
 
+## Google Drive 관심종목 동기화 (2026-06-15)
+- 나무증권 관심종목 CSV는 EUC-KR `INTR_EXCEL` 형식으로 생성한다.
+- 로컬 실행은 프로젝트 폴더에 직접 저장한다.
+- Streamlit Cloud는 사용자 PC 파일에 접근할 수 없어 `screening/drive_upload.py`가
+  Google Apps Script 웹 앱으로 CSV 바이트를 전송한다.
+- Apps Script는 EUC-KR 바이트 보존을 위해 기존 동명 파일을 휴지통으로 이동하고
+  새 blob 파일로 교체한다. `setContent()` 사용 금지.
+- Cloud secrets: `google_drive_upload_url`, `google_drive_upload_token`
+- 설정 가이드: `docs/google-drive-watchlist-setup.md`
+
 ## 테스트 상태
 - Phase 1 미국 (2026-04-21): 전체 파이프라인 스모크 OK — AAPL/MSFT/NVDA/BABA + ^IXIC, NVDA(1.335) > AAPL(0.794) > MSFT(0.744), BABA 중국 필터 제외
 - Phase 2 한국 (2026-04-28): 5 KOSPI 종목 + KS11 20일 RS — SK하이닉스 1위 RS 1.893, 삼성전자우 2위 RS 1.270
