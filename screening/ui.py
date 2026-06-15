@@ -1668,6 +1668,43 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
     if selected_ticker is not None:
         st.session_state[_key(spec, "selected_ticker")] = selected_ticker
 
+    if not ranked.empty:
+        _render_namuh_download(spec, ranked)
+
+
+# 나무증권 HTS 관심종목 파일 설정 (그룹번호·이름·티커 접두사·시장코드)
+_NAMUH_CONFIG = {
+    "kr": {"group_num": 4,  "group_name": "rs탑20",   "prefix": "",    "mkt": "1", "filename": "04_rs탑20.csv"},
+    "us": {"group_num": 2,  "group_name": "나스닥 rs", "prefix": "USA", "mkt": "T", "filename": "02_나스닥 rs.csv"},
+}
+
+
+def _generate_namuh_watchlist_csv(ranked: pd.DataFrame, cfg: dict) -> bytes:
+    """나무증권 HTS 관심종목 가져오기 형식(INTR_EXCEL) CSV 생성 — EUC-KR 인코딩."""
+    ordered = ranked.sort_values("return_n", ascending=False, na_position="last")
+    lines = [f"INTR_EXCEL,{cfg['group_num']:02d},{cfg['group_name']}"]
+    for _, row in ordered.iterrows():
+        raw_ticker = str(row.get("ticker", "")).strip()
+        ticker = cfg["prefix"] + raw_ticker
+        name = str(row.get("name_kr") or row.get("name_en") or raw_ticker).strip()
+        lines.append(f"{ticker},{name},,,{cfg['mkt']},,")
+    return ("\n".join(lines) + "\n").encode("euc-kr", errors="replace")
+
+
+def _render_namuh_download(spec: dict, ranked: pd.DataFrame) -> None:
+    cfg = _NAMUH_CONFIG.get(spec["code"])
+    if cfg is None:
+        return
+    csv_bytes = _generate_namuh_watchlist_csv(ranked, cfg)
+    st.download_button(
+        label=f"📥 나무증권 관심종목 다운로드 ({cfg['filename']})",
+        data=csv_bytes,
+        file_name=cfg["filename"],
+        mime="text/csv",
+        key=f"scr_{spec['code']}_namuh_download",
+        help="HTS → 관심종목 → 가져오기에서 이 파일을 선택하세요.",
+    )
+
 
 # ─── 퍼블릭 엔트리 ─────────────────────────────────────────────────
 
