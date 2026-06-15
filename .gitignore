@@ -38,6 +38,9 @@ api_keys.json
 # Claude Code 스케줄러 lock 파일
 .claude/scheduled_tasks.lock
 
+# 나무증권 HTS 관심종목 파일 (로컬 생성, 커밋 제외)
+[0-9][0-9]_*.csv
+
 # OS
 .DS_Store
 Thumbs.db

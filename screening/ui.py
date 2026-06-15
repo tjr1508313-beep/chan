@@ -1693,19 +1693,16 @@ def _generate_namuh_watchlist_csv(ranked: pd.DataFrame, cfg: dict) -> bytes:
     return ("\n".join(lines) + "\n").encode("euc-kr", errors="replace")
 
 
-def _is_local_run() -> bool:
-    """Streamlit Cloud 여부 판별 — 로컬이면 True."""
-    return not os.environ.get("STREAMLIT_SHARING_MODE") and not Path("/mount/src").exists()
-
-
 def _render_namuh_download(spec: dict, ranked: pd.DataFrame) -> None:
     cfg = _NAMUH_CONFIG.get(spec["code"])
     if cfg is None:
         return
     csv_bytes = _generate_namuh_watchlist_csv(ranked, cfg)
 
-    if _is_local_run():
-        save_path = Path.home() / "Documents" / cfg["filename"]
+    import sys
+    if sys.platform == "win32":
+        # 로컬 Windows 실행 — 스크리닝 폴더에 직접 덮어쓰기
+        save_path = Path(__file__).parent.parent / cfg["filename"]
         if st.button(
             label=f"📥 나무증권 관심종목 업데이트 ({cfg['filename']})",
             key=f"scr_{spec['code']}_namuh_save",
@@ -1714,6 +1711,7 @@ def _render_namuh_download(spec: dict, ranked: pd.DataFrame) -> None:
             save_path.write_bytes(csv_bytes)
             st.success(f"업데이트 완료 → {save_path}")
     else:
+        # Streamlit Cloud(Linux) — 브라우저 다운로드
         st.download_button(
             label=f"📥 나무증권 관심종목 다운로드 ({cfg['filename']})",
             data=csv_bytes,
