@@ -864,7 +864,7 @@ def cache_save_index_chart_snapshot(
     if len(combined) <= 1:
         return 0
 
-    snapshot = _repair_ohlc(combined.iloc[:-1].tail(days).copy())
+    snapshot = _repair_ohlc(combined.tail(days).copy())
     norm = _normalize_date_index(snapshot)
     rows = [
         (
