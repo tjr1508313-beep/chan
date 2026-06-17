@@ -22,6 +22,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 from lightweight_charts_pro.charts.options.line_options import LineOptions
+from lightweight_charts_pro.charts.options.localization_options import LocalizationOptions
 from lightweight_charts_pro.charts.options.price_format_options import PriceFormatOptions
 from lightweight_charts_pro.charts.options.time_scale_options import TimeScaleOptions
 from streamlit_lightweight_charts_pro import (
@@ -1571,6 +1572,7 @@ def _render_chart(
             },
         ),
         time_scale=TimeScaleOptions(time_visible=False, seconds_visible=False),
+        localization=LocalizationOptions(date_format="yy/M/d"),
     )
 
     chart = Chart(series=series, options=chart_opts)
