@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from pathlib import Path
@@ -55,6 +56,7 @@ from .core import (
     screen_apply_filters,
     screen_build_screening_df,
     screen_calc_rs,
+    screen_calc_swings,
     screen_filter_by_index_lag,
     screen_rank_rs,
     screen_rebuild_computed_snapshot,
@@ -1247,7 +1249,7 @@ def _render_ticker_search_result(
     )
 
     # 카드 바로 아래 컴팩트 차트
-    _render_chart(spec, ticker, lookback_days=90, height=360, key_suffix="search")
+    _render_chart(spec, ticker, lookback_days=90, height=360, key_suffix="search", name=name)
 
     # 검색 종목이 랭킹 안에도 있으면 해당 행 아래 차트도 함께 펼친다.
     st.session_state[_key(spec, "selected_ticker")] = ticker
@@ -1430,6 +1432,7 @@ def _render_ranking_table(
                         lookback_days=120,
                         height=440,
                         key_suffix="inline",
+                        name=name_raw,
                     )
 
     return st.session_state.get(_key(spec, "selected_ticker"))
@@ -1443,6 +1446,7 @@ def _render_chart(
     lookback_days: int = 120,
     height: int = 620,
     key_suffix: str = "default",
+    name: str = "",
 ) -> None:
     df = ui_load_chart_df(ticker, days=lookback_days + 70)
 
@@ -1574,6 +1578,19 @@ def _render_chart(
 
     _render_chart_metrics(spec, df, atr9)
 
+    # 바구니에 담기 버튼
+    atr_last_vals = atr9.dropna()
+    atr9_val = float(atr_last_vals.iloc[-1]) if len(atr_last_vals) > 0 else 0.0
+    already_in = any(item["ticker"] == ticker for item in _ensure_basket())
+    basket_label = "✓ 바구니에 있음" if already_in else "＋ 바구니에 담기"
+    if st.button(basket_label, key=f"scr_basket_add_{spec['code']}_{ticker}_{key_suffix}",
+                 disabled=already_in,
+                 help="배팅 계산기에서 포지션 사이즈를 계산합니다."):
+        _basket_add(ticker, name or ticker, spec["code"], last_close, atr9_val)
+        st.rerun()
+
+    _render_swing_analysis(spec, df, key_suffix=f"{ticker}_{key_suffix}")
+
 
 def _render_chart_metrics(spec: dict, df: pd.DataFrame, atr9: pd.Series) -> None:
     last_close = float(df["Close"].iloc[-1])
@@ -1672,6 +1689,197 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
 
     if not ranked.empty:
         _render_namuh_download(spec, ranked)
+
+
+# ─── 배팅 계산기 & 종목 바구니 ──────────────────────────────────────
+
+_BASKET_KEY = "scr_basket"
+
+
+def _ensure_basket() -> list:
+    if _BASKET_KEY not in st.session_state:
+        st.session_state[_BASKET_KEY] = []
+    return st.session_state[_BASKET_KEY]
+
+
+def _basket_add(ticker: str, name: str, spec_code: str, price: float, atr9: float) -> None:
+    basket = _ensure_basket()
+    if not any(item["ticker"] == ticker for item in basket):
+        basket.append({"ticker": ticker, "name": name, "spec_code": spec_code,
+                       "price": price, "atr9": atr9})
+
+
+def _basket_remove(ticker: str) -> None:
+    st.session_state[_BASKET_KEY] = [i for i in _ensure_basket() if i["ticker"] != ticker]
+
+
+def _render_betting_calculator_and_basket_sidebar() -> None:
+    """사이드바 최상단 — 배팅 계산기 + 종목 바구니."""
+    st.markdown("##### 배팅 계산기")
+    col_a, col_b = st.columns([2, 1])
+    with col_a:
+        st.number_input(
+            "자산 (원)",
+            min_value=0,
+            value=0,
+            step=10_000_000,
+            format="%d",
+            key="scr_portfolio_value",
+            help="보유 자산 총액 (KRW 기준)",
+        )
+    with col_b:
+        st.number_input(
+            "리스크 %",
+            min_value=0.1,
+            max_value=10.0,
+            value=1.0,
+            step=0.1,
+            format="%.1f",
+            key="scr_risk_pct",
+        )
+
+    portfolio: int = int(st.session_state.get("scr_portfolio_value", 0))
+    risk_pct: float = float(st.session_state.get("scr_risk_pct", 1.0))
+    total_risk = int(portfolio * risk_pct / 100)
+
+    # USD/KRW 환율 (미국 종목 포지션 계산용)
+    fx_rate: float = float(st.session_state.get("scr_fx_rate", 1_380.0))
+    with st.expander("환율 설정", expanded=False):
+        st.number_input(
+            "USD/KRW 환율",
+            min_value=500.0,
+            max_value=3_000.0,
+            value=1_380.0,
+            step=10.0,
+            format="%.0f",
+            key="scr_fx_rate",
+            help="미국 종목 포지션 계산에 사용",
+        )
+
+    risk_color = COLOR_PROFIT if total_risk > 0 else COLOR_MUTED
+    st.markdown(
+        f"<div style='margin:-4px 0 4px; font-size:0.85rem; color:{COLOR_MUTED};'>"
+        f"총 리스크: <span style='color:{risk_color}; font-weight:600;'>₩{total_risk:,}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    basket = _ensure_basket()
+    n_basket = len(basket)
+    per_risk = (total_risk // n_basket) if n_basket > 0 else 0
+
+    st.markdown(
+        f"<div style='font-size:0.82rem; color:{COLOR_MUTED}; margin-bottom:4px;'>"
+        f"종목 바구니 {n_basket}개"
+        + (
+            f" · 종목당 리스크 <span style='font-weight:600; color:{COLOR_TEXT};'>₩{per_risk:,}</span>"
+            if n_basket > 0 else ""
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    to_remove: list[str] = []
+    for item in basket:
+        ticker = item["ticker"]
+        name = item["name"]
+        spec_code = item["spec_code"]
+        price = item["price"]
+        atr9_val = item["atr9"]
+
+        # 포지션 계산: per_risk(KRW) / stop_distance(KRW)
+        if atr9_val and atr9_val > 0 and per_risk > 0:
+            if spec_code == "kr":
+                shares = math.floor(per_risk / atr9_val)
+                total_val = shares * price
+                size_str = f"{shares:,}주 (₩{total_val:,.0f})"
+            else:
+                # US: ATR은 USD 단위 → KRW 환산
+                atr9_krw = atr9_val * fx_rate
+                shares = math.floor(per_risk / atr9_krw) if atr9_krw > 0 else 0
+                total_val_usd = shares * price
+                size_str = f"{shares:,}주 (${total_val_usd:,.0f})"
+        else:
+            size_str = "—"
+
+        if spec_code == "kr":
+            price_str = f"₩{price:,.0f}"
+            atr_str = f"₩{atr9_val:,.0f}"
+        else:
+            price_str = f"${price:,.2f}"
+            atr_str = f"${atr9_val:,.2f}"
+
+        col1, col2 = st.columns([3.5, 0.5])
+        with col1:
+            st.markdown(
+                f"<div style='font-size:0.80rem; color:{COLOR_TEXT}; line-height:1.6;"
+                f"padding:4px 0;'>"
+                f"<b>{ticker}</b> {name}<br>"
+                f"<span style='color:{COLOR_MUTED};'>"
+                f"{price_str} · ATR {atr_str}</span><br>"
+                f"<span style='color:{COLOR_PROFIT}; font-weight:600;'>→ {size_str}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        with col2:
+            if st.button("×", key=f"scr_basket_rm_{ticker}", help=f"{ticker} 제거"):
+                to_remove.append(ticker)
+
+    for t in to_remove:
+        _basket_remove(t)
+    if to_remove:
+        st.rerun()
+
+    if n_basket > 0:
+        if st.button("바구니 비우기", key="scr_basket_clear", use_container_width=True):
+            st.session_state[_BASKET_KEY] = []
+            st.rerun()
+    else:
+        st.caption("차트에서 '바구니에 담기' 버튼으로 추가하세요.")
+
+    st.divider()
+
+
+# ─── 스윙 하락 구간 분석 표시 ────────────────────────────────────────
+
+def _render_swing_analysis(spec: dict, df: pd.DataFrame, key_suffix: str = "") -> None:
+    """111봉 스윙 하락 구간 분석 테이블 (차트 하단)."""
+    with st.expander("하락 스윙 구간 분석 (최근 111봉)", expanded=False):
+        swing_n = st.slider(
+            "스윙 감도 (좌우 N봉)",
+            min_value=2, max_value=10, value=5, step=1,
+            key=f"scr_swing_n_{spec['code']}_{key_suffix}",
+            help="값이 클수록 큰 스윙만 감지. 기본 5봉.",
+        )
+        swings = screen_calc_swings(df, window=111, swing_n=swing_n)
+        if not swings:
+            st.caption("감지된 하락 스윙 구간 없음. 감도를 낮춰보세요.")
+            return
+
+        rows = []
+        for i, s in enumerate(swings, 1):
+            rows.append({
+                "#": i,
+                "시작": s["start_date"],
+                "종료": s["end_date"],
+                "기간(봉)": s["duration_bars"],
+                "낙폭(%)": f"{s['pct_drop']:.1f}%",
+                "고점": spec["atr_fmt"](s["start_price"]),
+                "저점": spec["atr_fmt"](s["end_price"]),
+            })
+
+        swing_df = pd.DataFrame(rows).set_index("#")
+        st.dataframe(
+            swing_df,
+            use_container_width=True,
+            height=min(35 * len(rows) + 38, 300),
+        )
+
+        avg_dur = sum(s["duration_bars"] for s in swings) / len(swings)
+        avg_drop = sum(s["pct_drop"] for s in swings) / len(swings)
+        st.caption(
+            f"총 {len(swings)}개 구간 · 평균 기간 {avg_dur:.1f}봉 · 평균 낙폭 {avg_drop:.1f}%"
+        )
 
 
 # 나무증권 HTS 관심종목 파일 설정 (그룹번호·이름·티커 접두사·시장코드)
@@ -1819,6 +2027,7 @@ def render_screening_page() -> None:
         st.caption("상대강도(RS) 기반 종목 발굴")
         _render_remote_sync_badge()
         st.divider()
+        _render_betting_calculator_and_basket_sidebar()
     us_settings = _render_sidebar(_US_SPEC)
     with st.sidebar:
         st.divider()

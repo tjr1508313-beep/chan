@@ -753,6 +753,102 @@ def screen_rank_rs(
 
 
 # ---------------------------------------------------------------------------
+# 111봉 스윙 하락 구간 감지 (ZigZag — B안)
+# ---------------------------------------------------------------------------
+
+def screen_calc_swings(
+    df: pd.DataFrame,
+    window: int = 111,
+    swing_n: int = 5,
+) -> list[dict]:
+    """최근 window 봉 안에서 고점→저점 하락 스윙 구간 목록 반환 (ZigZag 방식).
+
+    B안: 중간에 반등봉이 섞여도 고점을 다시 뚫지 않는 한 같은 하락 구간으로 간주.
+    로컬 극값(SH/SL)을 감지 → 교번 H-L 시퀀스로 정리 → H→L 쌍을 하락 스윙으로 추출.
+
+    Returns:
+        list of dicts — start_date, end_date, start_price, end_price,
+        duration_bars (봉 수), pct_drop (%)
+    """
+    if df is None or df.empty:
+        return []
+    if not {"High", "Low"}.issubset(df.columns):
+        return []
+
+    data = df.tail(window)
+    n = len(data)
+    if n < swing_n * 2 + 2:
+        return []
+
+    highs = data["High"]
+    lows = data["Low"]
+
+    # 좌우 swing_n 봉 중 극값인 지점 탐지 (rolling center=True)
+    w = 2 * swing_n + 1
+    roll_max = highs.rolling(w, center=True, min_periods=swing_n + 1).max()
+    roll_min = lows.rolling(w, center=True, min_periods=swing_n + 1).min()
+
+    sh_mask = highs == roll_max
+    sl_mask = lows == roll_min
+
+    # 시간순 pivot 목록
+    pivots: list[tuple[str, object, float]] = []
+    for ts in data.index:
+        if sh_mask.loc[ts]:
+            pivots.append(("H", ts, float(highs.loc[ts])))
+        if sl_mask.loc[ts]:
+            pivots.append(("L", ts, float(lows.loc[ts])))
+
+    if not pivots:
+        return []
+
+    pivots.sort(key=lambda x: x[1])
+
+    # 연속 같은 타입 → 더 극단값으로 병합
+    merged: list[list] = []
+    for ptype, ts, price in pivots:
+        if merged and merged[-1][0] == ptype:
+            prev = merged[-1]
+            if (ptype == "H" and price > prev[2]) or (ptype == "L" and price < prev[2]):
+                prev[1] = ts
+                prev[2] = price
+        else:
+            merged.append([ptype, ts, price])
+
+    # H→L 쌍 → 하락 스윙
+    swings: list[dict] = []
+    idx_arr = list(data.index)
+    for i in range(len(merged) - 1):
+        if merged[i][0] != "H" or merged[i + 1][0] != "L":
+            continue
+        sh_ts, sh_price = merged[i][1], merged[i][2]
+        sl_ts, sl_price = merged[i + 1][1], merged[i + 1][2]
+        try:
+            sh_pos = idx_arr.index(sh_ts)
+            sl_pos = idx_arr.index(sl_ts)
+        except ValueError:
+            continue
+        duration = sl_pos - sh_pos
+        if duration <= 0:
+            continue
+        pct_drop = (sl_price - sh_price) / sh_price * 100.0
+
+        def _fmt(ts: object) -> str:
+            return ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else str(ts)
+
+        swings.append({
+            "start_date": _fmt(sh_ts),
+            "end_date": _fmt(sl_ts),
+            "start_price": sh_price,
+            "end_price": sl_price,
+            "duration_bars": duration,
+            "pct_drop": pct_drop,
+        })
+
+    return swings
+
+
+# ---------------------------------------------------------------------------
 # 사용 예시 (Phase 1.6 UI 에서 조합):
 #   df = screen_build_screening_df(tickers)
 #   filtered, stats = screen_apply_filters(df, config)
