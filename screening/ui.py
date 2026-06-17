@@ -1842,8 +1842,12 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
 
 # ─── 스윙 하락 구간 분석 표시 ────────────────────────────────────────
 
+@st.fragment
 def _render_swing_analysis(spec: dict, df: pd.DataFrame, key_suffix: str = "") -> None:
-    """111봉 스윙 하락 구간 분석 테이블 (차트 하단)."""
+    """111봉 스윙 하락 구간 분석 테이블 (차트 하단).
+
+    @st.fragment 로 격리 — 슬라이더 변경 시 이 섹션만 재실행되어 차트가 사라지지 않음.
+    """
     with st.expander("하락 스윙 구간 분석 (최근 111봉)", expanded=False):
         swing_n = st.slider(
             "스윙 감도 (좌우 N봉)",
