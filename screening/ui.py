@@ -2082,21 +2082,16 @@ def render_screening_page() -> None:
         st.divider()
     kr_settings = _render_sidebar(_KR_SPEC)
 
-    # ★ Step 1: 시장 요약 카드 (US + KR 나란히) — 차트 없이 텍스트만
+    # 카드 · 차트 · 랭킹을 단일 컬럼 블록으로 — 블록 간 Streamlit 자동 여백 제거
     st.markdown("### 📊 오늘의 시장")
-    sum_cols = st.columns(2, gap="large")
-    with sum_cols[0]:
+    main_cols = st.columns(2, gap="large")
+    with main_cols[0]:
         _render_market_card(_US_SPEC, us_settings)
-    with sum_cols[1]:
-        _render_market_card(_KR_SPEC, kr_settings)
-
-    # ★ Step 2: 지수 차트 + 종목 랭킹 (컬럼별 연속 배치 — 카드와 차트 사이 공백 없음)
-    rank_cols = st.columns(2, gap="large")
-    with rank_cols[0]:
         _render_market_index_chart(_US_SPEC, us_settings[0])
         st.markdown("## 미국주식")
         _render_screening_section(_US_SPEC, us_settings)
-    with rank_cols[1]:
+    with main_cols[1]:
+        _render_market_card(_KR_SPEC, kr_settings)
         _render_market_index_chart(_KR_SPEC, kr_settings[0])
         st.markdown("## 한국주식")
         _render_screening_section(_KR_SPEC, kr_settings)
