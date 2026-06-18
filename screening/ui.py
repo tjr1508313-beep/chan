@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import threading
 import time
@@ -1696,6 +1697,40 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
 # ─── 배팅 계산기 & 종목 바구니 ──────────────────────────────────────
 
 _BASKET_KEY = "scr_basket"
+_PREFS_FILE = Path(__file__).parent.parent / ".user_prefs.json"
+_PREFS_KEYS = ("scr_portfolio_value", "scr_risk_pct", "scr_fx_rate")
+_PREFS_INITIALIZED = "scr_prefs_initialized"
+
+
+def _load_prefs() -> None:
+    """앱 시작 시 1회: JSON 파일 → session_state 복원."""
+    if st.session_state.get(_PREFS_INITIALIZED):
+        return
+    st.session_state[_PREFS_INITIALIZED] = True
+    try:
+        data = json.loads(_PREFS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    for key, val in data.get("prefs", {}).items():
+        if key in _PREFS_KEYS and key not in st.session_state:
+            st.session_state[key] = val
+    basket = data.get("basket", [])
+    if _BASKET_KEY not in st.session_state and isinstance(basket, list):
+        st.session_state[_BASKET_KEY] = basket
+
+
+def _save_prefs() -> None:
+    """현재 값을 JSON 파일에 저장."""
+    prefs = {k: st.session_state.get(k) for k in _PREFS_KEYS
+             if st.session_state.get(k) is not None}
+    basket = st.session_state.get(_BASKET_KEY, [])
+    try:
+        _PREFS_FILE.write_text(
+            json.dumps({"prefs": prefs, "basket": basket}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def _ensure_basket() -> list:
@@ -1709,10 +1744,12 @@ def _basket_add(ticker: str, name: str, spec_code: str, price: float, atr9: floa
     if not any(item["ticker"] == ticker for item in basket):
         basket.append({"ticker": ticker, "name": name, "spec_code": spec_code,
                        "price": price, "atr9": atr9})
+        _save_prefs()
 
 
 def _basket_remove(ticker: str) -> None:
     st.session_state[_BASKET_KEY] = [i for i in _ensure_basket() if i["ticker"] != ticker]
+    _save_prefs()
 
 
 def _render_betting_calculator_and_basket_sidebar() -> None:
@@ -1723,10 +1760,11 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
         st.number_input(
             "자산 (원)",
             min_value=0,
-            value=0,
+            value=int(st.session_state.get("scr_portfolio_value", 0)),
             step=10_000_000,
             format="%d",
             key="scr_portfolio_value",
+            on_change=_save_prefs,
             help="보유 자산 총액 (KRW 기준)",
         )
     with col_b:
@@ -1734,10 +1772,11 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
             "리스크 %",
             min_value=0.1,
             max_value=10.0,
-            value=1.0,
+            value=float(st.session_state.get("scr_risk_pct", 1.0)),
             step=0.1,
             format="%.1f",
             key="scr_risk_pct",
+            on_change=_save_prefs,
         )
 
     portfolio: int = int(st.session_state.get("scr_portfolio_value", 0))
@@ -1745,18 +1784,19 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
     total_risk = int(portfolio * risk_pct / 100)
 
     # USD/KRW 환율 (미국 종목 포지션 계산용)
-    fx_rate: float = float(st.session_state.get("scr_fx_rate", 1_380.0))
     with st.expander("환율 설정", expanded=False):
         st.number_input(
             "USD/KRW 환율",
             min_value=500.0,
             max_value=3_000.0,
-            value=1_380.0,
+            value=float(st.session_state.get("scr_fx_rate", 1_380.0)),
             step=10.0,
             format="%.0f",
             key="scr_fx_rate",
+            on_change=_save_prefs,
             help="미국 종목 포지션 계산에 사용",
         )
+    fx_rate: float = float(st.session_state.get("scr_fx_rate", 1_380.0))
 
     risk_color = COLOR_PROFIT if total_risk > 0 else COLOR_MUTED
     st.markdown(
@@ -1835,6 +1875,7 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
     if n_basket > 0:
         if st.button("바구니 비우기", key="scr_basket_clear", use_container_width=True):
             st.session_state[_BASKET_KEY] = []
+            _save_prefs()
             st.rerun()
     else:
         st.caption("차트에서 '바구니에 담기' 버튼으로 추가하세요.")
@@ -2028,6 +2069,7 @@ def render_screening_page() -> None:
     상단에 시장 요약 카드 2개 (US + KR) 가 함께 표시된다.
     선택한 종목의 차트는 각 시장의 해당 순위 행 바로 아래에 펼쳐진다.
     """
+    _load_prefs()
     with st.sidebar:
         st.markdown("#### 주식 스크리닝")
         st.caption("상대강도(RS) 기반 종목 발굴")
