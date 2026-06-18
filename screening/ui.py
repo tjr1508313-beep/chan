@@ -1759,14 +1759,14 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
     col_a, col_b = st.columns([2, 1])
     with col_a:
         st.number_input(
-            "자산 (원)",
+            "자산 (만원)",
             min_value=0,
             value=int(st.session_state.get("scr_portfolio_value", 0)),
-            step=10_000_000,
+            step=1,
             format="%d",
             key="scr_portfolio_value",
             on_change=_save_prefs,
-            help="보유 자산 총액 (KRW 기준)",
+            help="보유 자산 총액 (만원 단위 — 1500 입력 시 1,500만원)",
         )
     with col_b:
         st.number_input(
@@ -1780,7 +1780,8 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
             on_change=_save_prefs,
         )
 
-    portfolio: int = int(st.session_state.get("scr_portfolio_value", 0))
+    portfolio_man: int = int(st.session_state.get("scr_portfolio_value", 0))
+    portfolio: int = portfolio_man * 10_000  # 만원 → 원 환산
     risk_pct: float = float(st.session_state.get("scr_risk_pct", 1.0))
     total_risk = int(portfolio * risk_pct / 100)
 
