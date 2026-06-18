@@ -1473,17 +1473,6 @@ def _render_ranking_table(
                     use_container_width=True,
                 )
 
-            if ticker == selected_ticker:
-                with st.container(key=f"scr_inline_chart_{spec['code']}_{ticker}"):
-                    _render_chart(
-                        spec,
-                        ticker,
-                        lookback_days=120,
-                        height=440,
-                        key_suffix="inline",
-                        name=name_raw,
-                    )
-
     return st.session_state.get(_key(spec, "selected_ticker"))
 
 
@@ -1760,6 +1749,26 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
     selected_ticker = _render_ranking_table(spec, ranked, rs_period, index_code)
     if selected_ticker is not None:
         st.session_state[_key(spec, "selected_ticker")] = selected_ticker
+
+    # 선택된 종목 차트 — 랭킹 테이블 아래 고정 위치
+    # (루프 안이 아니므로 미국/한국 두 차트를 동시에 표시 가능)
+    current_selected = st.session_state.get(_key(spec, "selected_ticker"))
+    if current_selected:
+        sel_rows = ranked[ranked["ticker"] == current_selected]
+        if not sel_rows.empty:
+            r0 = sel_rows.iloc[0]
+            name_raw = _first_valid_name(r0.get("name_kr"), r0.get("name_en"), current_selected)
+        else:
+            name_raw = current_selected
+        with st.container(key=f"scr_inline_chart_{spec['code']}_{current_selected}"):
+            _render_chart(
+                spec,
+                current_selected,
+                lookback_days=120,
+                height=440,
+                key_suffix="inline",
+                name=name_raw,
+            )
 
     if not ranked.empty:
         _render_namuh_download(spec, ranked)
