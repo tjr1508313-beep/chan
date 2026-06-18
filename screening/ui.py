@@ -427,6 +427,8 @@ def _render_market_index_chart(spec: dict, index_code: str) -> None:
 
     precision = int(spec.get("chart_price_precision", 2))
     min_move = float(spec.get("chart_price_min_move", 0.01))
+    price_fmt = PriceFormatOptions(type="price", precision=precision, min_move=min_move)
+
     candle = CandlestickSeries(
         data=candle_df,
         column_mapping={
@@ -444,12 +446,22 @@ def _render_market_index_chart(spec: dict, index_code: str) -> None:
     candle.border_down_color = _COLOR_DOWN
     candle.wick_up_color = _COLOR_UP
     candle.wick_down_color = _COLOR_DOWN
-    candle.price_format = PriceFormatOptions(
-        type="price", precision=precision, min_move=min_move
+    candle.price_format = price_fmt
+
+    ma5_df = pd.DataFrame({
+        "time": candle_df["time"],
+        "value": candle_df["close"].rolling(5).mean(),
+    }).dropna(subset=["value"])
+    ma5_line = LineSeries(
+        data=ma5_df,
+        column_mapping={"time": "time", "value": "value"},
+        pane_id=0,
     )
+    ma5_line.line_options = LineOptions(color=_COLOR_MA5, line_width=1, line_visible=True)
+    ma5_line.price_format = price_fmt
 
     chart = Chart(
-        series=[candle],
+        series=[candle, ma5_line],
         options=ChartOptions(
             height=190,
             layout=LayoutOptions(
