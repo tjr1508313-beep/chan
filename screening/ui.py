@@ -462,6 +462,7 @@ def _render_market_index_chart(spec: dict, index_code: str) -> None:
                 ),
             ),
             time_scale=TimeScaleOptions(time_visible=False, seconds_visible=False),
+            localization=LocalizationOptions(locale="ko-KR", date_format="yy.MM.dd"),
         ),
     )
     chart.render(key=f"lwc_market_index_{spec['code']}_{index_code}")
@@ -1573,7 +1574,7 @@ def _render_chart(
             },
         ),
         time_scale=TimeScaleOptions(time_visible=False, seconds_visible=False),
-        localization=LocalizationOptions(date_format="yy/M/d"),
+        localization=LocalizationOptions(locale="ko-KR", date_format="yy.MM.dd"),
     )
 
     chart = Chart(series=series, options=chart_opts)
