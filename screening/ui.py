@@ -1640,7 +1640,19 @@ def _render_chart(
     )
 
     chart = Chart(series=series, options=chart_opts)
-    chart.render(key=f"lwc_chart_{spec['code']}_{ticker}_{key_suffix}")
+    chart_key = f"lwc_chart_{spec['code']}_{ticker}_{key_suffix}"
+    # 이전 렌더의 시리즈 설정 잔재 제거
+    _ss_key = f"_chart_series_configs_{chart_key}"
+    if _ss_key in st.session_state:
+        del st.session_state[_ss_key]
+    # handle_response 비활성: 차트 프론트엔드가 보내는 get_pane_state 등의
+    # API 응답 처리를 끄면 components.html(height=0) 고스트 iframe 삽입이
+    # 사라진다. 이 고스트가 Streamlit 요소 트리를 흔들어
+    #   (1) 차트 재렌더 churn → 비대화형(스냅샷처럼 굳음)
+    #   (2) 다른 컬럼 차트 렌더 시 기존 차트가 트리에서 밀려 사라짐
+    # 캔들/라인은 초기 config(단방향)로 그려지므로 차트 표시에는 영향 없음.
+    chart._chart_renderer.handle_response = lambda *args, **kwargs: None
+    chart.render(key=chart_key)
 
     _render_chart_metrics(spec, df, atr9)
 
