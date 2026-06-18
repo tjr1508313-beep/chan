@@ -477,11 +477,15 @@ def _render_market_index_chart(spec: dict, index_code: str) -> None:
         ),
     )
     chart_key = f"lwc_market_index_{spec['code']}_{index_code}"
-    # 이전 세션에서 차트가 상호작용 상태를 저장했을 경우 handle_response가
-    # 추가 height=0 컴포넌트를 렌더링하며 갭을 만들므로, 매 렌더마다 초기화한다.
+    # 세션 상태 초기화: 이전 렌더에서 저장된 시리즈 설정이 있으면 제거
     _ss_key = f"_chart_series_configs_{chart_key}"
     if _ss_key in st.session_state:
         del st.session_state[_ss_key]
+    # handle_response 비활성: 시리즈가 2개(캔들+MA5)이면 차트 프론트엔드가
+    # get_pane_state 등의 API 요청을 자동 전송하고, handle_response가
+    # components.html(height=0) 아이프레임을 렌더링해 갭을 만든다.
+    # 인덱스 차트는 표시 전용이므로 Series Settings API 응답 처리를 비활성한다.
+    chart._chart_renderer.handle_response = lambda *args, **kwargs: None
     chart.render(key=chart_key)
     st.caption(
         f"최근 {len(df)}일 완성 봉 · 마지막 봉 {df.index[-1].strftime('%Y-%m-%d')}"
