@@ -1489,6 +1489,31 @@ def _render_ranking_table(
 
 # ─── 차트 패널 ──────────────────────────────────────────────────────
 
+def _chart_handle_response_safe(response, key, session_state_manager) -> None:
+    """종목 차트용 handle_response 패치.
+
+    series_config_changes(시리즈 표시/숨김 상태 저장)만 처리하고,
+    get_pane_state · update_series_settings · reset_series_defaults 등
+    API 요청 타입은 스킵해 components.html(height=0) iframe 렌더링을 막는다.
+    이 iframe이 컬럼 안에 렌더되면 레이아웃이 뒤틀려 지수 차트가 사라지는 증상이 생김.
+    """
+    if not (response and isinstance(response, dict)):
+        return
+    if response.get("type") != "series_config_changes":
+        return
+    changes = response.get("changes", [])
+    if not changes:
+        return
+    series_configs = {}
+    for change in changes:
+        sid = change.get("seriesId")
+        cfg = change.get("config")
+        if sid and cfg:
+            series_configs[sid] = cfg
+    if series_configs:
+        session_state_manager.save_series_configs(key, series_configs)
+
+
 def _render_chart(
     spec: dict,
     ticker: str,
@@ -1624,6 +1649,7 @@ def _render_chart(
     )
 
     chart = Chart(series=series, options=chart_opts)
+    chart._chart_renderer.handle_response = _chart_handle_response_safe
     chart.render(key=f"lwc_chart_{spec['code']}_{ticker}_{key_suffix}")
 
     _render_chart_metrics(spec, df, atr9)
@@ -1743,7 +1769,7 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
 
 _BASKET_KEY = "scr_basket"
 _PREFS_FILE = Path(__file__).parent.parent / ".user_prefs.json"
-_PREFS_KEYS = ("scr_portfolio_value", "scr_risk_pct", "scr_fx_rate")
+_PREFS_KEYS = ("scr_portfolio_value", "scr_risk_pct", "scr_fx_rate", "scr_stop_n_mult")
 _PREFS_INITIALIZED = "scr_prefs_initialized"
 
 
@@ -1800,7 +1826,7 @@ def _basket_remove(ticker: str) -> None:
 def _render_betting_calculator_and_basket_sidebar() -> None:
     """사이드바 최상단 — 배팅 계산기 + 종목 바구니."""
     st.markdown("##### 배팅 계산기")
-    col_a, col_b = st.columns([2, 1])
+    col_a, col_b, col_c = st.columns([3, 1, 1])
     with col_a:
         st.number_input(
             "자산 (만원)",
@@ -1823,11 +1849,24 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
             key="scr_risk_pct",
             on_change=_save_prefs,
         )
+    with col_c:
+        st.number_input(
+            "손절 N배",
+            min_value=0.5,
+            max_value=5.0,
+            value=float(st.session_state.get("scr_stop_n_mult", 2.0)),
+            step=0.5,
+            format="%.1f",
+            key="scr_stop_n_mult",
+            on_change=_save_prefs,
+            help="ATR 몇 배 하락 시 손절할지 (기본 2N). 수량 = 종목당 리스크 ÷ (ATR × N배)",
+        )
 
     portfolio_man: int = int(st.session_state.get("scr_portfolio_value", 0))
     portfolio: int = portfolio_man * 10_000  # 만원 → 원 환산
     risk_pct: float = float(st.session_state.get("scr_risk_pct", 1.0))
     total_risk = int(portfolio * risk_pct / 100)
+    stop_n_mult: float = float(st.session_state.get("scr_stop_n_mult", 2.0))
 
     # USD/KRW 환율 (미국 종목 포지션 계산용)
     with st.expander("환율 설정", expanded=False):
@@ -1878,17 +1917,24 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
         # 포지션 계산: per_risk(KRW) / stop_distance(KRW)
         if atr9_val and atr9_val > 0 and per_risk > 0:
             if spec_code == "kr":
-                shares = math.floor(per_risk / atr9_val)
+                stop_dist = atr9_val * stop_n_mult
+                shares = math.floor(per_risk / stop_dist)
                 total_val = shares * price
+                stop_price = price - stop_dist
                 size_str = f"{shares:,}주 (₩{total_val:,.0f})"
+                stop_str = f"손절가 ₩{stop_price:,.0f} ({stop_n_mult:.1g}N)"
             else:
                 # US: ATR은 USD 단위 → KRW 환산
                 atr9_krw = atr9_val * fx_rate
-                shares = math.floor(per_risk / atr9_krw) if atr9_krw > 0 else 0
+                stop_dist_krw = atr9_krw * stop_n_mult
+                shares = math.floor(per_risk / stop_dist_krw) if stop_dist_krw > 0 else 0
                 total_val_usd = shares * price
+                stop_price_usd = price - atr9_val * stop_n_mult
                 size_str = f"{shares:,}주 (${total_val_usd:,.0f})"
+                stop_str = f"손절가 ${stop_price_usd:,.2f} ({stop_n_mult:.1g}N)"
         else:
             size_str = "—"
+            stop_str = ""
 
         if spec_code == "kr":
             price_str = f"₩{price:,.0f}"
@@ -1899,6 +1945,10 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
 
         col1, col2 = st.columns([3.5, 0.5])
         with col1:
+            stop_line = (
+                f"<br><span style='color:{COLOR_MUTED}; font-size:0.78rem;'>{stop_str}</span>"
+                if stop_str else ""
+            )
             st.markdown(
                 f"<div style='font-size:0.80rem; color:{COLOR_TEXT}; line-height:1.6;"
                 f"padding:4px 0;'>"
@@ -1906,6 +1956,7 @@ def _render_betting_calculator_and_basket_sidebar() -> None:
                 f"<span style='color:{COLOR_MUTED};'>"
                 f"{price_str} · ATR {atr_str}</span><br>"
                 f"<span style='color:{COLOR_PROFIT}; font-weight:600;'>→ {size_str}</span>"
+                f"{stop_line}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
