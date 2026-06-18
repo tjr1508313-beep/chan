@@ -464,7 +464,13 @@ def _render_market_index_chart(spec: dict, index_code: str) -> None:
             localization=LocalizationOptions(locale="ko-KR", date_format="yy.MM.dd"),
         ),
     )
-    chart.render(key=f"lwc_market_index_{spec['code']}_{index_code}")
+    chart_key = f"lwc_market_index_{spec['code']}_{index_code}"
+    # 이전 세션에서 차트가 상호작용 상태를 저장했을 경우 handle_response가
+    # 추가 height=0 컴포넌트를 렌더링하며 갭을 만들므로, 매 렌더마다 초기화한다.
+    _ss_key = f"_chart_series_configs_{chart_key}"
+    if _ss_key in st.session_state:
+        del st.session_state[_ss_key]
+    chart.render(key=chart_key)
     st.caption(
         f"최근 {len(df)}일 완성 봉 · 마지막 봉 {df.index[-1].strftime('%Y-%m-%d')}"
     )
@@ -622,36 +628,18 @@ def _render_index_status_badge(index_code: str) -> None:
     )
 
 
-def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
-    """자산군 사이드바 → (index_code, rs_period, top_n, filter_config)."""
+def _render_sidebar(spec: dict) -> dict:
+    """자산군 사이드바 → filter_config. 지수/기간/표시 개수는 메인 화면 인라인 컨트롤로 이동."""
     with st.sidebar:
         st.markdown(f"##### {spec['label']} 설정")
 
+        # 지수 코드는 인라인 위젯에서 관리 — 배지/새로고침 표시용으로만 읽음
         index_options = spec["indices"]
-        selected_label = st.selectbox(
-            "지수 선택",
-            options=list(index_options.keys()),
-            index=0,
-            key=_key(spec, "selected_index"),
-            help=f"RS 계산의 기준 지수 ({spec['refresh_data_label']}).",
-        )
-        index_code = index_options[selected_label]
+        sel = st.session_state.get(_key(spec, "selected_index"), list(index_options.keys())[0])
+        if sel not in index_options:
+            sel = list(index_options.keys())[0]
+        index_code = index_options[sel]
 
-        rs_period = st.slider(
-            "RS 계산 기간 (일)",
-            min_value=5, max_value=60, value=20, step=1,
-            key=_key(spec, "rs_period"),
-            help=(
-                "RS = 종목 N일 수익률 - 지수 N일 수익률. "
-                "양수이면 지수보다 강합니다."
-            ),
-        )
-        top_n = st.slider(
-            "표시 개수 (Top N)",
-            min_value=10, max_value=50, value=20, step=5,
-            key=_key(spec, "top_n"),
-            help="랭킹 테이블에 표시할 상위 종목 수.",
-        )
         _render_index_status_badge(index_code)
 
         _render_refresh_section(spec, index_code)
@@ -744,7 +732,19 @@ def _render_sidebar(spec: dict) -> tuple[str, int, int, dict]:
             "exclude_risk": bool(exclude_risk),
         }
 
-    return index_code, int(rs_period), int(top_n), filter_config
+    return filter_config
+
+
+def _get_inline_settings(spec: dict) -> tuple[str, int, int]:
+    """세션 상태에서 현재 인라인 설정값 읽기 (위젯 렌더링 전 호출용)."""
+    index_options = spec["indices"]
+    sel = st.session_state.get(_key(spec, "selected_index"), list(index_options.keys())[0])
+    if sel not in index_options:
+        sel = list(index_options.keys())[0]
+    index_code = index_options[sel]
+    rs_period = int(st.session_state.get(_key(spec, "rs_period"), 20))
+    top_n = int(st.session_state.get(_key(spec, "top_n"), 20))
+    return index_code, rs_period, top_n
 
 
 # ─── 새로고침 (백그라운드 스레드) ─────────────────────────────────
@@ -965,29 +965,60 @@ def _render_refresh_section(spec: dict, index_code: str) -> None:
 # ─── 헤더/배지/필터 요약 ───────────────────────────────────────────
 
 def _render_rs_header(
-    index_code: str, index_display: str, rs_period: int, top_n: int
+    spec: dict, index_code: str, index_display: str, rs_period: int, top_n: int
 ) -> None:
     info = _get_index_period_info(index_code, rs_period)
-    cols = st.columns([2, 1.4])
-    with cols[0]:
+    index_options = spec["indices"]
+
+    title_col, ctrl_col, info_col = st.columns([1.4, 2.6, 1.8])
+
+    with title_col:
         st.markdown(f"### RS Top {top_n}")
-        st.caption(f"RS = 종목 {rs_period}일 수익률 - 지수 {rs_period}일 수익률")
-    with cols[1]:
-        if info is None:
-            return
-        sign = "+" if info["return_pct"] >= 0 else ""
-        color = COLOR_PROFIT if info["return_pct"] >= 0 else COLOR_LOSS
-        st.markdown(
-            f"<div style='text-align:right;'>"
-            f"<div style='color:{color}; font-weight:700; font-size:1.05rem;'>"
-            f"{index_display} {rs_period}일 수익률: {sign}{info['return_pct']:.2f}%"
-            f"</div>"
-            f"<div style='color:{COLOR_MUTED}; font-size:0.78rem; margin-top:2px;'>"
-            f"{info['start_date']} → {info['end_date']} "
-            f"({info['start_close']:,.2f} → {info['end_close']:,.2f})"
-            f"</div></div>",
-            unsafe_allow_html=True,
-        )
+
+    with ctrl_col:
+        c1, c2, c3 = st.columns([2, 1, 1])
+        with c1:
+            st.selectbox(
+                "지수",
+                options=list(index_options.keys()),
+                key=_key(spec, "selected_index"),
+            )
+        with c2:
+            st.number_input(
+                "기간(일)",
+                min_value=5, max_value=60,
+                value=20,
+                step=1,
+                key=_key(spec, "rs_period"),
+                help="RS = 종목 N일 수익률 - 지수 N일 수익률",
+            )
+        with c3:
+            st.number_input(
+                "표시(개)",
+                min_value=10, max_value=50,
+                value=20,
+                step=5,
+                key=_key(spec, "top_n"),
+                help="랭킹 테이블에 표시할 상위 종목 수",
+            )
+
+    with info_col:
+        if info is not None:
+            sign = "+" if info["return_pct"] >= 0 else ""
+            color = COLOR_PROFIT if info["return_pct"] >= 0 else COLOR_LOSS
+            st.markdown(
+                f"<div style='text-align:right;'>"
+                f"<div style='color:{color}; font-weight:700; font-size:1.05rem;'>"
+                f"{index_display} {rs_period}일: {sign}{info['return_pct']:.2f}%"
+                f"</div>"
+                f"<div style='color:{COLOR_MUTED}; font-size:0.78rem; margin-top:2px;'>"
+                f"{info['start_date']} → {info['end_date']} "
+                f"({info['start_close']:,.2f} → {info['end_close']:,.2f})"
+                f"</div></div>",
+                unsafe_allow_html=True,
+            )
+
+    st.caption(f"RS = 종목 {rs_period}일 수익률 - 지수 {rs_period}일 수익률")
 
 
 def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
@@ -1643,9 +1674,7 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
 
     index_display = _index_display_name(index_code)
 
-    _render_rs_header(index_code, index_display, rs_period, top_n)
-    _render_filter_summary(spec, filter_config)
-    _render_pipeline_badge(stats, len(ranked))
+    _render_rs_header(spec, index_code, index_display, rs_period, top_n)
 
     if stats.get("total", 0) == 0 or not tickers:
         st.warning(
@@ -2077,10 +2106,15 @@ def render_screening_page() -> None:
         _render_remote_sync_badge()
         st.divider()
         _render_betting_calculator_and_basket_sidebar()
-    us_settings = _render_sidebar(_US_SPEC)
+    us_filter_config = _render_sidebar(_US_SPEC)
     with st.sidebar:
         st.divider()
-    kr_settings = _render_sidebar(_KR_SPEC)
+    kr_filter_config = _render_sidebar(_KR_SPEC)
+
+    us_index_code, us_rs_period, us_top_n = _get_inline_settings(_US_SPEC)
+    us_settings = (us_index_code, us_rs_period, us_top_n, us_filter_config)
+    kr_index_code, kr_rs_period, kr_top_n = _get_inline_settings(_KR_SPEC)
+    kr_settings = (kr_index_code, kr_rs_period, kr_top_n, kr_filter_config)
 
     # 카드 · 차트 · 랭킹을 단일 컬럼 블록으로 — 블록 간 Streamlit 자동 여백 제거
     st.markdown("### 📊 오늘의 시장")
