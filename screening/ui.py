@@ -1106,7 +1106,11 @@ def _make_pick_callback(spec: dict, ticker: str):
     target_key = _key(spec, "selected_ticker")
 
     def _cb() -> None:
-        st.session_state[target_key] = ticker
+        # 토글: 같은 종목을 다시 클릭하면 선택 해제(차트 닫힘)
+        if st.session_state.get(target_key) == ticker:
+            st.session_state[target_key] = None
+        else:
+            st.session_state[target_key] = ticker
 
     return _cb
 
