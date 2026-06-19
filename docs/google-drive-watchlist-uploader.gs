@@ -65,3 +65,20 @@ function jsonResponse(payload) {
     .createTextOutput(JSON.stringify(payload))
     .setMimeType(ContentService.MimeType.JSON);
 }
+
+/**
+ * 최초 1회: 편집기에서 이 함수를 선택해 ▶ 실행하면 권한 승인 창이 뜬다.
+ * UrlFetchApp(외부 요청)·Drive 권한을 한꺼번에 승인해 doPost 가 동작하게 한다.
+ * 승인 후에는 다시 실행할 필요 없다.
+ */
+function authorize() {
+  DriveApp.getRootFolder();  // Drive 권한 트리거
+  const resp = UrlFetchApp.fetch(
+    "https://www.googleapis.com/drive/v3/about?fields=user",
+    {
+      headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true,
+    }
+  );  // 외부 요청(script.external_request) 권한 트리거
+  Logger.log("authorize OK: HTTP " + resp.getResponseCode());
+}
