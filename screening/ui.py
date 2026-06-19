@@ -2034,7 +2034,10 @@ def _generate_namuh_watchlist_csv(ranked: pd.DataFrame, cfg: dict) -> bytes:
     for _, row in ordered.iterrows():
         raw_ticker = str(row.get("ticker", "")).strip()
         ticker = cfg["prefix"] + raw_ticker
-        name = str(row.get("name_kr") or row.get("name_en") or raw_ticker).strip()
+        # NaN-safe: pandas NaN 은 truthy 라 `or` 체인이 'nan' 을 채택하는 버그 방지.
+        # 콤마는 CSV 컬럼을 깨뜨리므로 공백으로 치환.
+        name = _first_valid_name(row.get("name_kr"), row.get("name_en"), raw_ticker)
+        name = name.replace(",", " ").strip() or raw_ticker
         lines.append(f"{ticker},{name},,,{cfg['mkt']},,")
     return ("\n".join(lines) + "\n").encode("euc-kr", errors="replace")
 
