@@ -27,14 +27,34 @@ function doPost(e) {
     const blob = Utilities.newBlob(bytes, "text/csv", body.filename);
     const files = folder.getFilesByName(body.filename);
 
-    // setContent()는 문자열을 UTF-8로 다시 인코딩해 EUC-KR CSV를 깨뜨릴 수 있다.
-    // 기존 동명 파일을 휴지통으로 이동한 뒤 원본 바이트 blob으로 교체한다.
-    while (files.hasNext()) {
-      files.next().setTrashed(true);
+    if (files.hasNext()) {
+      // 기존 파일을 '같은 파일 ID 유지'한 채 내용만 교체한다(새 파일 안 생김).
+      // DriveApp.setContent()는 문자열을 UTF-8로 재인코딩해 EUC-KR CSV를 깨뜨리므로,
+      // Drive REST 미디어 업로드(PATCH)로 원본 바이트를 그대로 덮어써 인코딩을 보존한다.
+      const fileId = files.next().getId();
+      const resp = UrlFetchApp.fetch(
+        "https://www.googleapis.com/upload/drive/v3/files/" + fileId + "?uploadType=media",
+        {
+          method: "patch",
+          payload: blob,
+          headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+          muteHttpExceptions: true,
+        }
+      );
+      const code = resp.getResponseCode();
+      if (code < 200 || code >= 300) {
+        return jsonResponse({ ok: false, error: "내용 교체 실패(HTTP " + code + "): " + resp.getContentText() });
+      }
+      // 혹시 같은 이름의 중복 파일이 더 있으면 정리(휴지통)
+      while (files.hasNext()) {
+        files.next().setTrashed(true);
+      }
+      return jsonResponse({ ok: true, message: "기존 파일 내용 교체 완료: " + body.filename });
     }
-    folder.createFile(blob);
 
-    return jsonResponse({ ok: true, message: "Google Drive 업데이트 완료: " + body.filename });
+    // 처음이면 새로 생성
+    folder.createFile(blob);
+    return jsonResponse({ ok: true, message: "새 파일 생성 완료: " + body.filename });
   } catch (error) {
     return jsonResponse({ ok: false, error: String(error) });
   }
