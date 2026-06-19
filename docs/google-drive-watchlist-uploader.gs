@@ -18,7 +18,7 @@ function doPost(e) {
     if (!folderId) {
       return jsonResponse({ ok: false, error: "WATCHLIST_FOLDER_ID가 설정되지 않았습니다." });
     }
-    if (!/^(02_|04_).+\.csv$/.test(body.filename || "")) {
+    if (!/^0[1-9]_.+\.csv$/.test(body.filename || "")) {
       return jsonResponse({ ok: false, error: "허용되지 않은 파일명입니다." });
     }
 

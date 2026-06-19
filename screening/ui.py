@@ -1756,7 +1756,7 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
         st.session_state[_key(spec, "selected_ticker")] = selected_ticker
 
     if not ranked.empty:
-        _render_namuh_download(spec, ranked)
+        _render_namuh_download(spec, ranked, index_code)
 
 
 # ─── 배팅 계산기 & 종목 바구니 ──────────────────────────────────────
@@ -2021,10 +2021,28 @@ def _render_swing_analysis(spec: dict, df: pd.DataFrame, key_suffix: str = "") -
 
 
 # 나무증권 HTS 관심종목 파일 설정 (그룹번호·이름·티커 접두사·시장코드)
+# 미국은 조회 지수(나스닥/S&P500)에 따라 다른 그룹/파일로 분기.
+_NAMUH_CONFIG_BY_INDEX = {
+    "^IXIC": {"group_num": 2, "group_name": "나스닥 rs", "prefix": "USA", "mkt": "T", "filename": "02_나스닥 rs.csv"},
+    "^GSPC": {"group_num": 3, "group_name": "s&p rs",   "prefix": "USA", "mkt": "T", "filename": "03_s&p rs.csv"},
+}
+# 자산군 기본값 (위 지수별 매핑에 없을 때 폴백)
 _NAMUH_CONFIG = {
     "kr": {"group_num": 4,  "group_name": "rs탑20",   "prefix": "",    "mkt": "1", "filename": "04_rs탑20.csv"},
     "us": {"group_num": 2,  "group_name": "나스닥 rs", "prefix": "USA", "mkt": "T", "filename": "02_나스닥 rs.csv"},
 }
+
+
+def _namuh_config_for(spec: dict, index_code: str) -> dict | None:
+    """spec·index_code 에 맞는 나무증권 관심종목 파일 설정을 반환.
+
+    미국은 조회 지수에 따라 분기(나스닥→02, S&P500→03),
+    한국 등 나머지는 자산군 기본값 사용.
+    """
+    by_index = _NAMUH_CONFIG_BY_INDEX.get(index_code)
+    if by_index is not None:
+        return by_index
+    return _NAMUH_CONFIG.get(spec["code"])
 
 
 def _generate_namuh_watchlist_csv(ranked: pd.DataFrame, cfg: dict) -> bytes:
@@ -2042,8 +2060,8 @@ def _generate_namuh_watchlist_csv(ranked: pd.DataFrame, cfg: dict) -> bytes:
     return ("\n".join(lines) + "\n").encode("euc-kr", errors="replace")
 
 
-def _render_namuh_download(spec: dict, ranked: pd.DataFrame) -> None:
-    cfg = _NAMUH_CONFIG.get(spec["code"])
+def _render_namuh_download(spec: dict, ranked: pd.DataFrame, index_code: str = "") -> None:
+    cfg = _namuh_config_for(spec, index_code)
     if cfg is None:
         return
     csv_bytes = _generate_namuh_watchlist_csv(ranked, cfg)
