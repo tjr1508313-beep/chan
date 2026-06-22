@@ -23,6 +23,8 @@ from __future__ import annotations
 import re
 import threading
 from datetime import datetime, timedelta
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -35,6 +37,7 @@ import pandas as pd
 # 영업일 대비 달력일 버퍼 (미국 쪽과 동일 정책).
 _CAL_DAYS_MULTIPLIER = 1.6
 _CAL_DAYS_FLOOR = 7
+_KR_SECTOR_CSV = Path(__file__).resolve().parent.parent / "data" / "kr_sector_map.csv"
 
 
 def _calendar_span(days: int) -> int:
@@ -58,6 +61,37 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     if getattr(out.index, "tz", None) is not None:
         out.index = out.index.tz_localize(None)
     return out.sort_index()
+
+
+@lru_cache(maxsize=1)
+def _load_kr_sector_map() -> dict[str, str]:
+    """수동/반자동 한국 업종 매핑 CSV 로드.
+
+    FDR StockListing('KRX')는 현재 업종 컬럼을 제공하지 않는다. 따라서
+    `data/kr_sector_map.csv`를 우선 메타 소스로 사용하고, 비어 있으면 None으로 둔다.
+    """
+    if not _KR_SECTOR_CSV.exists():
+        return {}
+    try:
+        df = pd.read_csv(_KR_SECTOR_CSV, dtype=str).fillna("")
+    except Exception:
+        return {}
+    if "ticker" not in df.columns or "sector" not in df.columns:
+        return {}
+
+    out: dict[str, str] = {}
+    for _, row in df.iterrows():
+        ticker = str(row.get("ticker", "")).strip().zfill(6)
+        sector = str(row.get("sector", "")).strip()
+        if ticker and sector:
+            out[ticker] = sector
+    return out
+
+
+def kr_get_sector(ticker: str) -> str | None:
+    """한국 종목 6자리 코드의 업종/섹터 매핑 조회."""
+    code = str(ticker).strip().zfill(6)
+    return _load_kr_sector_map().get(code)
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +268,7 @@ def kr_get_meta(ticker: str) -> dict:
         dict 키 (미국 쪽과 통일):
             - name_en (str): 영문명 — FDR 미제공 시 ticker 그대로
             - name_kr (str | None): 한글명 (FDR `Name`)
-            - sector (str | None): FDR 미제공 → None
+            - sector (str | None): `data/kr_sector_map.csv` 매핑값, 없으면 None
             - country (str): 'South Korea'
             - exchange (str | None): 'KOSPI' or 'KOSDAQ'
             - market_cap (float | None): FDR `Marcap` (원화)
@@ -246,7 +280,7 @@ def kr_get_meta(ticker: str) -> dict:
         return {
             "name_en": ticker,
             "name_kr": None,
-            "sector": None,
+            "sector": kr_get_sector(ticker),
             "country": "South Korea",
             "exchange": None,
             "market_cap": None,
@@ -266,7 +300,7 @@ def kr_get_meta(ticker: str) -> dict:
     return {
         "name_en": str(name_kr) if name_kr else ticker,  # 영문명 미제공 → 한글명 또는 ticker
         "name_kr": str(name_kr) if name_kr else None,
-        "sector": None,
+        "sector": kr_get_sector(ticker),
         "country": "South Korea",
         "exchange": str(row.get("_market", "")) or None,
         "market_cap": market_cap,

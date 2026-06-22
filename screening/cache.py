@@ -14,7 +14,7 @@
         PK: (index_code, date)
     index_chart_snapshot (index_code, date, open, high, low, close)
         PK: (index_code, date)
-        - 첫 화면용 최근 110개 완성 봉. 갱신 시 가장 늦은 날짜 1개 제외.
+        - 첫 화면용 최근 110개 완성 봉. 장 마감 후 갱신하므로 최신 봉 포함.
 
 이 모듈은 **순수 SQLite 영속 저장소**이다.
     - `streamlit` import 금지 (`@st.cache_data` 는 상위 UI 레이어에서 부착)
@@ -844,8 +844,8 @@ def cache_save_index_chart_snapshot(
 ) -> int:
     """첫 화면용 지수 OHLC 스냅샷을 갱신한다.
 
-    기존 스냅샷과 새로 받은 지수 일봉을 병합한 뒤 가장 늦은 날짜 1개를
-    미완성 가능 봉으로 제외하고 최근 ``days`` 개만 저장한다.
+    기존 스냅샷과 새로 받은 지수 일봉을 병합한 뒤 최근 ``days`` 개만 저장한다.
+    갱신은 장 마감 후에만 수행하므로 최신 봉을 포함한다.
     """
     if df is None or df.empty or days <= 0:
         return 0

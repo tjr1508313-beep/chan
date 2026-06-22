@@ -21,7 +21,7 @@ def _ohlc(start: str, periods: int, first: float = 100.0) -> pd.DataFrame:
     )
 
 
-def test_index_chart_snapshot_keeps_110_and_drops_latest(tmp_path, monkeypatch):
+def test_index_chart_snapshot_keeps_110_and_includes_latest(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "chart.db")
     cache.init_cache()
     prices = _ohlc("2025-01-01", 120)
@@ -31,8 +31,7 @@ def test_index_chart_snapshot_keeps_110_and_drops_latest(tmp_path, monkeypatch):
 
     assert saved == 110
     assert len(chart) == 110
-    assert chart.index[-1] == prices.index[-2]
-    assert chart.index[-1] != prices.index[-1]
+    assert chart.index[-1] == prices.index[-1]
     assert list(chart.columns) == ["Open", "High", "Low", "Close"]
 
 
@@ -50,7 +49,7 @@ def test_index_chart_snapshot_returns_empty_for_legacy_db_without_table(
     assert list(chart.columns) == ["Open", "High", "Low", "Close"]
 
 
-def test_index_chart_snapshot_merges_next_refresh_before_dropping_latest(
+def test_index_chart_snapshot_merges_next_refresh_and_includes_latest(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "chart.db")
@@ -64,8 +63,7 @@ def test_index_chart_snapshot_merges_next_refresh_before_dropping_latest(
     chart = cache.cache_load_index_chart_snapshot("^TEST")
 
     assert len(chart) == 110
-    assert chart.index[-1] == next_prices.index[-2]
-    assert chart.index[-1] != next_prices.index[-1]
+    assert chart.index[-1] == next_prices.index[-1]
 
 
 def test_index_refresh_builds_missing_chart_snapshot_even_when_close_is_current(

@@ -151,7 +151,9 @@ def ui_load_ranked_df(
 
     ranked = screen_rank_rs(passing, index_code, period=rs_period, top_n=top_n)
     if not ranked.empty:
-        meta_cols = filtered[["name_en", "name_kr", "avg_traded_value_20d", "market_cap"]]
+        meta_cols = filtered[
+            ["name_en", "name_kr", "sector", "avg_traded_value_20d", "market_cap"]
+        ]
         ranked = ranked.merge(meta_cols, left_on="ticker", right_index=True, how="left")
     return ranked, stats
 

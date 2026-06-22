@@ -55,7 +55,7 @@ C:\스크리닝\
   `index_prices`, `index_chart_snapshot`, `universe`, `screening_metrics`, `stock_returns`
 - CRUD: `cache_save_prices/load_prices/save_meta/load_meta/save_index/load_index`
 - 첫 화면 지수 차트: `cache_save_index_chart_snapshot/load_index_chart_snapshot`
-  - 기존 스냅샷 + 신규 OHLC 병합 후 가장 늦은 날짜 1개 제외
+  - 기존 스냅샷 + 신규 OHLC 병합 후 최근 110개 저장. 장 마감 후 갱신하므로 최신 봉 포함
   - 최근 완성 봉 110개만 저장하므로 사이트 진입 시 원시 지수 일봉 집계 없음
   - 구 원격 DB에 테이블이 없어도 로더는 빈 차트로 폴백하며,
     `screening.py`의 `_init_cache_once(schema_version=2)`가 배포 시 스키마를 보강
@@ -86,6 +86,11 @@ C:\스크리닝\
 - `screen_filter_by_index_lag(tickers, index_code, max_lag_days=0) -> (passing, excluded)` — RS 시간 정합성 보장. 종목 캐시 마지막일이 지수보다 N일 초과 뒤처지면 제외 (2026-05-06 추가)
 - `screen_calc_rs(prices, index_prices, period=20)` — 단일/wide 지원
 - `screen_rank_rs(tickers, index_code, period=20, top_n=20) -> DataFrame`
+  - `top_n=None` 이면 계산 가능한 전체 필터 통과 랭킹 반환 (섹터 분석용)
+- `screen_build_sector_rankings(ranked, metadata, top_n_per_sector=5, min_sector_size=1) -> (summary, members)`
+  - `summary`: 섹터별 강도 요약. `sector_score = 섹터 내부 상위 N개 return_n 평균`
+  - `members`: 섹터 내부 종목 랭킹. `rank_in_sector` 포함
+  - 섹터 메타가 없으면 `미분류`로 묶음. 한국은 `data/kr_sector_map.csv` 매핑 사용
 
 ### `screening/ui.py` (UI)
 - `render_screening_page()` — 미국/한국 한 화면 위·아래 배치 진입점
@@ -125,7 +130,7 @@ C:\스크리닝\
 1. **yfinance 레이트 리밋 불안정** — 미국 3,800종목 전체 새로고침은 수십 분. 사이드바 `max_tickers` 제한 필수 (기본 200)
 2. **`yf.Ticker().info` 느림** (요청당 0.3~1초) → 메타 TTL 7일
 3. **장중 호출 시 당일 미완성 종목 봉** — 종목 변동성 필터 오작동 가능. 배치는 장 마감 후 권장.
-   첫 화면 지수 차트는 배치가 가장 늦은 날짜 봉을 제외해 별도 보호.
+   첫 화면 지수 차트는 장 마감 후 갱신 전제를 사용하므로 최신 스냅샷 봉을 포함.
 4. **한국 위험종목 필터 보류** — KRX 공시 익명 차단, pykrx 인증 필요, DART API 키 미설정. 사이드바 체크박스만 살아있음 (실제 적용 안 됨)
 5. **한국 corporate action 자동 감지 미구현** — FDR 에 splits API 없음. 사용자가 force 수동 또는 stale-first 정렬에 의지 (미국은 2026-05-06 자동화 완료)
 6. ~~**종목/지수 마지막일 미스매치 시 RS 시간 정합성 잃음**~~ — `screen_filter_by_index_lag` 로 해결됨 (2026-05-06)
@@ -152,6 +157,20 @@ C:\스크리닝\
   새 blob 파일로 교체한다. `setContent()` 사용 금지.
 - Cloud secrets: `google_drive_upload_url`, `google_drive_upload_token`
 - 설정 가이드: `docs/google-drive-watchlist-setup.md`
+
+## 섹터 RS 백엔드 (2026-06-22)
+- 사용자가 "주도섹터의 주도주"를 보고 싶다고 요청. UI는 나중, 백엔드부터 진행.
+- `screen_rank_rs(..., top_n=None)` 으로 전체 필터 통과 랭킹을 받을 수 있게 확장.
+- `screen_build_sector_rankings()` 추가:
+  - 입력: 전체 랭킹 + `screen_build_screening_df()` 메타/필터 DF
+  - 출력: `sector_summary`, `sector_members`
+  - 섹터 점수는 섹터 안 상위 N개 `return_n` 평균. 지수 수익률은 같은 화면/지수 안에서 동일하므로 RS 정렬과 동일한 방향.
+  - `positive_ratio`, 평균/중앙 RS, 1등 종목, 섹터 내부 순위까지 포함.
+- `ui_load_ranked_df()` 는 향후 UI 연결을 위해 `sector` 컬럼도 랭킹 결과에 병합.
+- 한국은 FDR 기본 메타가 sector를 제공하지 않아 `data/kr_sector_map.csv` 추가.
+  - CSV 스키마: `ticker,name_kr,sector,source,updated_at`
+  - `screening.data_kr.kr_get_sector()` / `kr_get_meta()`가 이 파일을 읽어 metadata.sector를 채움.
+  - 현재 파일은 헤더만 있으며, 실제 업종 분류는 수동/반자동 데이터 확보 후 채우면 됨.
 
 ## 테스트 상태
 - Phase 1 미국 (2026-04-21): 전체 파이프라인 스모크 OK — AAPL/MSFT/NVDA/BABA + ^IXIC, NVDA(1.335) > AAPL(0.794) > MSFT(0.744), BABA 중국 필터 제외

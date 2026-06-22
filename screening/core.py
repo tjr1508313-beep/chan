@@ -651,12 +651,45 @@ _RANK_DF_COLUMNS = [
     "below_ma5",
 ]
 
+_SECTOR_SUMMARY_COLUMNS = [
+    "rank",
+    "sector",
+    "stock_count",
+    "positive_count",
+    "positive_ratio",
+    "avg_return_n",
+    "median_return_n",
+    "top_return_n",
+    "sector_score",
+    "avg_rs",
+    "median_rs",
+    "avg_rs_weighted",
+    "top_ticker",
+    "top_name",
+    "top_rs_weighted",
+]
+
+_SECTOR_MEMBER_COLUMNS = [
+    "sector",
+    "sector_rank",
+    "rank_in_sector",
+    "ticker",
+    "name_en",
+    "name_kr",
+    "return_n",
+    "rs",
+    "rs_weighted",
+    "last_price",
+    "market_cap",
+    "avg_traded_value_20d",
+]
+
 
 def screen_rank_rs(
     tickers: Iterable[str],
     index_code: str,
     period: int = 20,
-    top_n: int = 20,
+    top_n: int | None = 20,
 ) -> pd.DataFrame:
     """캐시에서 티커 시세/지수를 꺼내 RS Top N 랭킹 DataFrame 을 반환한다.
 
@@ -664,7 +697,7 @@ def screen_rank_rs(
         tickers: 대상 티커 (보통 필터 통과 종목).
         index_code: 기준 지수 코드 (예: `^IXIC`, `^GSPC`).
         period: RS 계산 기간. 기본 20.
-        top_n: 상위 N개.
+        top_n: 상위 N개. `None`이면 계산 가능한 전체 랭킹을 반환.
 
     Returns:
         columns=_RANK_DF_COLUMNS 의 DataFrame. 종목 N일 수익률 내림차순, rank 1부터.
@@ -693,7 +726,9 @@ def screen_rank_rs(
             joined["index_return_n"] = float(idx_return)
             joined = joined.rename(columns={"rs_weighted": "rs_weighted"})
             joined = joined.dropna(subset=["rs"])
-            joined = joined.sort_values("return_n", ascending=False, kind="mergesort").head(top_n)
+            joined = joined.sort_values("return_n", ascending=False, kind="mergesort")
+            if top_n is not None:
+                joined = joined.head(int(top_n))
             joined = joined.reset_index().rename(columns={"index": "ticker"})
             joined.insert(0, "rank", range(1, len(joined) + 1))
             return joined[_RANK_DF_COLUMNS]
@@ -747,9 +782,178 @@ def screen_rank_rs(
 
     df = pd.DataFrame(rows)
     df = df.sort_values("return_n", ascending=False, kind="mergesort").reset_index(drop=True)
-    df = df.head(top_n).copy()
+    if top_n is not None:
+        df = df.head(int(top_n)).copy()
+    else:
+        df = df.copy()
     df.insert(0, "rank", range(1, len(df) + 1))
     return df[_RANK_DF_COLUMNS]
+
+
+def _clean_sector(value: object, unknown_sector: str) -> str:
+    if value is None or pd.isna(value):
+        return unknown_sector
+    text = str(value).strip()
+    return text if text else unknown_sector
+
+
+def _first_display_name(row: pd.Series) -> str:
+    for col in ("name_kr", "name_en", "ticker"):
+        value = row.get(col)
+        if value is not None and not pd.isna(value) and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def screen_build_sector_rankings(
+    ranked: pd.DataFrame,
+    metadata: pd.DataFrame | None = None,
+    *,
+    top_n_per_sector: int = 5,
+    min_sector_size: int = 1,
+    unknown_sector: str = "미분류",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """섹터별 강도 요약과 섹터 내부 주도주 랭킹을 만든다.
+
+    Args:
+        ranked: `screen_rank_rs(..., top_n=None)` 결과처럼 `ticker`, `return_n`, `rs`
+            컬럼을 가진 DataFrame. 섹터 분석은 전체 필터 통과 종목 랭킹을 넣는 것이 좋다.
+        metadata: `screen_build_screening_df()` 결과 또는 ticker index 를 가진 메타 DataFrame.
+            `sector`, `name_en`, `name_kr`, `market_cap`, `avg_traded_value_20d` 등을 병합한다.
+        top_n_per_sector: 섹터 점수 계산에 사용할 섹터 내부 상위 종목 수.
+            `sector_score = 섹터 내부 상위 N개 return_n 평균`.
+        min_sector_size: 이 수보다 종목 수가 적은 섹터는 요약에서 제외.
+        unknown_sector: 섹터 메타가 없을 때 사용할 그룹명.
+
+    Returns:
+        `(sector_summary, sector_members)`.
+        - `sector_summary`: 섹터별 강도 요약, `sector_score` 내림차순.
+        - `sector_members`: 섹터별 종목 랭킹, `rank_in_sector` 포함.
+    """
+    if ranked is None or ranked.empty:
+        return (
+            pd.DataFrame(columns=_SECTOR_SUMMARY_COLUMNS),
+            pd.DataFrame(columns=_SECTOR_MEMBER_COLUMNS),
+        )
+    if not {"ticker", "return_n", "rs"}.issubset(ranked.columns):
+        missing = {"ticker", "return_n", "rs"} - set(ranked.columns)
+        raise ValueError(f"ranked에 필요한 컬럼이 없습니다: {sorted(missing)}")
+
+    members = ranked.copy()
+    members["ticker"] = members["ticker"].astype(str).str.strip().str.upper()
+
+    if metadata is not None and not metadata.empty:
+        meta = metadata.copy()
+        if "ticker" in meta.columns:
+            meta = meta.set_index("ticker")
+        meta.index = meta.index.astype(str).str.strip().str.upper()
+        wanted_cols = [
+            c
+            for c in [
+                "sector",
+                "name_en",
+                "name_kr",
+                "market_cap",
+                "avg_traded_value_20d",
+            ]
+            if c in meta.columns
+        ]
+        if wanted_cols:
+            members = members.merge(
+                meta[wanted_cols],
+                left_on="ticker",
+                right_index=True,
+                how="left",
+                suffixes=("", "_meta"),
+            )
+            for col in wanted_cols:
+                meta_col = f"{col}_meta"
+                if meta_col in members.columns:
+                    if col in members.columns:
+                        members[col] = members[col].combine_first(members[meta_col])
+                    else:
+                        members[col] = members[meta_col]
+                    members = members.drop(columns=[meta_col])
+
+    if "sector" not in members.columns:
+        members["sector"] = unknown_sector
+    members["sector"] = members["sector"].map(lambda v: _clean_sector(v, unknown_sector))
+    members["return_n"] = pd.to_numeric(members["return_n"], errors="coerce")
+    members["rs"] = pd.to_numeric(members["rs"], errors="coerce")
+    if "rs_weighted" in members.columns:
+        members["rs_weighted"] = pd.to_numeric(members["rs_weighted"], errors="coerce")
+    else:
+        members["rs_weighted"] = np.nan
+
+    members = members.dropna(subset=["return_n", "rs"])
+    if members.empty:
+        return (
+            pd.DataFrame(columns=_SECTOR_SUMMARY_COLUMNS),
+            pd.DataFrame(columns=_SECTOR_MEMBER_COLUMNS),
+        )
+
+    members = members.sort_values(
+        ["sector", "return_n"], ascending=[True, False], kind="mergesort"
+    ).copy()
+    members["rank_in_sector"] = members.groupby("sector").cumcount() + 1
+
+    summary_rows: list[dict] = []
+    for sector, group in members.groupby("sector", sort=False):
+        if len(group) < int(min_sector_size):
+            continue
+        ordered = group.sort_values("return_n", ascending=False, kind="mergesort")
+        leaders = ordered.head(max(int(top_n_per_sector), 1))
+        top = ordered.iloc[0]
+        summary_rows.append(
+            {
+                "sector": sector,
+                "stock_count": int(len(group)),
+                "positive_count": int((group["return_n"] > 0).sum()),
+                "positive_ratio": float((group["return_n"] > 0).mean()),
+                "avg_return_n": float(group["return_n"].mean()),
+                "median_return_n": float(group["return_n"].median()),
+                "top_return_n": float(top["return_n"]),
+                "sector_score": float(leaders["return_n"].mean()),
+                "avg_rs": float(group["rs"].mean()),
+                "median_rs": float(group["rs"].median()),
+                "avg_rs_weighted": (
+                    float(group["rs_weighted"].mean())
+                    if group["rs_weighted"].notna().any()
+                    else float("nan")
+                ),
+                "top_ticker": top["ticker"],
+                "top_name": _first_display_name(top),
+                "top_rs_weighted": (
+                    float(top["rs_weighted"]) if pd.notna(top["rs_weighted"]) else float("nan")
+                ),
+            }
+        )
+
+    if not summary_rows:
+        return (
+            pd.DataFrame(columns=_SECTOR_SUMMARY_COLUMNS),
+            pd.DataFrame(columns=_SECTOR_MEMBER_COLUMNS),
+        )
+
+    summary = pd.DataFrame(summary_rows)
+    summary = summary.sort_values(
+        ["sector_score", "positive_ratio", "stock_count"],
+        ascending=[False, False, False],
+        kind="mergesort",
+    ).reset_index(drop=True)
+    summary.insert(0, "rank", range(1, len(summary) + 1))
+
+    sector_rank_map = dict(zip(summary["sector"], summary["rank"], strict=False))
+    members = members[members["sector"].isin(sector_rank_map)].copy()
+    members["sector_rank"] = members["sector"].map(sector_rank_map).astype(int)
+    members = members.sort_values(
+        ["sector_rank", "rank_in_sector"], ascending=[True, True], kind="mergesort"
+    ).reset_index(drop=True)
+
+    for col in _SECTOR_MEMBER_COLUMNS:
+        if col not in members.columns:
+            members[col] = np.nan
+    return summary[_SECTOR_SUMMARY_COLUMNS], members[_SECTOR_MEMBER_COLUMNS]
 
 
 # ---------------------------------------------------------------------------
