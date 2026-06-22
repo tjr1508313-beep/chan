@@ -41,3 +41,24 @@ def test_kr_get_meta_includes_sector_mapping(tmp_path, monkeypatch):
 
     assert meta["sector"] == "반도체"
     assert meta["name_kr"] == "SK하이닉스"
+
+
+def test_kr_save_sector_map_writes_normalized_csv_and_clears_cache(tmp_path, monkeypatch):
+    csv_path = tmp_path / "kr_sector_map.csv"
+    monkeypatch.setattr(data_kr, "_KR_SECTOR_CSV", csv_path)
+    data_kr._load_kr_sector_map.cache_clear()
+
+    saved = data_kr.kr_save_sector_map(
+        pd.DataFrame(
+            [
+                {"ticker": "5930", "name_kr": "삼성전자", "sector": "반도체"},
+                {"ticker": "000660", "name_kr": "SK하이닉스", "sector": "반도체"},
+            ]
+        )
+    )
+
+    assert saved == 2
+    assert data_kr.kr_get_sector("005930") == "반도체"
+    written = pd.read_csv(csv_path, dtype=str)
+    assert list(written.columns) == ["ticker", "name_kr", "sector", "source", "updated_at"]
+    assert "005930" in set(written["ticker"])

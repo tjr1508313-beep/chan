@@ -30,6 +30,8 @@
 - 섹터 메타가 없으면 `미분류`로 묶어 계산 흐름을 유지
 - 미국은 yfinance sector 메타 활용
 - 한국은 FDR 메타에 sector가 없어 `data/kr_sector_map.csv`의 `ticker,name_kr,sector,source,updated_at` 매핑을 우선 사용
+  - `scripts/build_kr_sector_map.py`가 시총 상위 종목을 이름 규칙으로 분류해 1차 매핑 후보를 생성
+  - 현재 CSV는 name-rule 기반 초안이므로 틀린 섹터는 사용하면서 수동 보정
 
 ## 개발 단계
 > 상세 내역은 `.claude/plans/PLAN.md` 참고.

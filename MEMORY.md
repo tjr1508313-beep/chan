@@ -170,7 +170,8 @@ C:\스크리닝\
 - 한국은 FDR 기본 메타가 sector를 제공하지 않아 `data/kr_sector_map.csv` 추가.
   - CSV 스키마: `ticker,name_kr,sector,source,updated_at`
   - `screening.data_kr.kr_get_sector()` / `kr_get_meta()`가 이 파일을 읽어 metadata.sector를 채움.
-  - 현재 파일은 헤더만 있으며, 실제 업종 분류는 수동/반자동 데이터 확보 후 채우면 됨.
+  - `scripts/build_kr_sector_map.py --max-rows 500 --apply` 로 시총 상위 500개 중 이름 규칙에 걸린 192개 초안 저장.
+  - source=`name-rule`은 실전 테마형 자동 초안이다. 틀린 분류는 CSV에서 직접 고치는 방식.
 
 ## 테스트 상태
 - Phase 1 미국 (2026-04-21): 전체 파이프라인 스모크 OK — AAPL/MSFT/NVDA/BABA + ^IXIC, NVDA(1.335) > AAPL(0.794) > MSFT(0.744), BABA 중국 필터 제외

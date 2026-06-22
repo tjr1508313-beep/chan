@@ -94,6 +94,38 @@ def kr_get_sector(ticker: str) -> str | None:
     return _load_kr_sector_map().get(code)
 
 
+def kr_save_sector_map(rows: pd.DataFrame, path: Path | None = None) -> int:
+    """한국 섹터 매핑 CSV를 저장하고 메모리 캐시를 무효화한다.
+
+    Args:
+        rows: `ticker`, `name_kr`, `sector` 컬럼을 포함한 DataFrame.
+        path: 저장 경로. 기본값은 `data/kr_sector_map.csv`.
+
+    Returns:
+        저장된 매핑 행 수.
+    """
+    target = path or _KR_SECTOR_CSV
+    target.parent.mkdir(parents=True, exist_ok=True)
+    cols = ["ticker", "name_kr", "sector", "source", "updated_at"]
+    if rows is None or rows.empty:
+        pd.DataFrame(columns=cols).to_csv(target, index=False, encoding="utf-8")
+        _load_kr_sector_map.cache_clear()
+        return 0
+
+    out = rows.copy()
+    for col in cols:
+        if col not in out.columns:
+            out[col] = ""
+    out["ticker"] = out["ticker"].astype(str).str.strip().str.zfill(6)
+    out["name_kr"] = out["name_kr"].fillna("").astype(str).str.strip()
+    out["sector"] = out["sector"].fillna("").astype(str).str.strip()
+    out = out[(out["ticker"] != "") & (out["sector"] != "")]
+    out = out[cols].drop_duplicates(subset=["ticker"], keep="last").sort_values("ticker")
+    out.to_csv(target, index=False, encoding="utf-8")
+    _load_kr_sector_map.cache_clear()
+    return int(len(out))
+
+
 # ---------------------------------------------------------------------------
 # StockListing 캐시 (프로세스 내 1회 — TTL 없음, 새로고침은 프로세스 재시작)
 # ---------------------------------------------------------------------------
