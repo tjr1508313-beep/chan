@@ -96,6 +96,9 @@ C:\스크리닝\
   - 한국 종목은 기존 metadata.sector가 비어 있어도 `kr_get_sector()`로 CSV 매핑을 snapshot metadata에 overlay
   - `screen_select_sector_summary()` / `screen_select_sector_members()` 로 특정 섹터만 조회 가능
   - CLI: `py scripts/show_sector_rs.py --index-code KS11 --period 20 --sector 반도체 --csv-dir out`
+- `screening.ls_sector`
+  - LS증권 `t8424` 전체업종, `t1516` 업종별종목시세로 한국 종목→업종 매핑 후보 생성
+  - `.env`의 `LS_APP_KEY` / `LS_APP_SECRET` 사용, 초당 1건 제한을 고려해 기본 sleep 1.05초
 
 ### `screening/ui.py` (UI)
 - `render_screening_page()` — 미국/한국 한 화면 위·아래 배치 진입점
@@ -183,6 +186,10 @@ C:\스크리닝\
   - universe cache가 비어 있으면 기존 FDR/yfinance 목록 로더로 fallback 후 cache 저장.
   - 한국 섹터는 snapshot 단계에서 CSV 매핑을 overlay하므로 메타 캐시를 전부 새로 만들지 않아도 반영됨.
   - source=`name-rule`은 실전 테마형 자동 초안이다. 틀린 분류는 CSV에서 직접 고치는 방식.
+- LS증권 업종 API 보강 (2026-06-23):
+  - `scripts/build_kr_sector_map_ls.py --apply` 실행.
+  - 기존 192개 `name-rule` 행을 보존하고, LS 공식 업종 `ls-industry` 2,434개를 추가해 총 2,626개 저장.
+  - 코스피 스냅샷 기준 필터 통과 124개 중 미분류는 2개까지 감소.
 
 ## 테스트 상태
 - Phase 1 미국 (2026-04-21): 전체 파이프라인 스모크 OK — AAPL/MSFT/NVDA/BABA + ^IXIC, NVDA(1.335) > AAPL(0.794) > MSFT(0.744), BABA 중국 필터 제외
