@@ -235,3 +235,33 @@ def test_snapshot_falls_back_to_loader_and_saves_universe_when_cache_is_empty(
     ]
     assert calls[0] == ("build", ["AAA", "BBB"], 20)
     assert list(result["ranked"]["ticker"]) == ["AAA", "BBB"]
+
+
+def test_select_sector_members_filters_one_sector_case_insensitively():
+    sector = _sector_module()
+    members = pd.DataFrame(
+        [
+            {"sector": "Tech", "rank_in_sector": 2, "ticker": "BBB"},
+            {"sector": "Energy", "rank_in_sector": 1, "ticker": "CCC"},
+            {"sector": "Tech", "rank_in_sector": 1, "ticker": "AAA"},
+        ]
+    )
+
+    selected = sector.screen_select_sector_members(members, "tech")
+
+    assert list(selected["ticker"]) == ["AAA", "BBB"]
+
+
+def test_select_sector_summary_filters_one_sector_case_insensitively():
+    sector = _sector_module()
+    summary = pd.DataFrame(
+        [
+            {"rank": 1, "sector": "Tech", "sector_score": 0.3},
+            {"rank": 2, "sector": "Energy", "sector_score": 0.1},
+        ]
+    )
+
+    selected = sector.screen_select_sector_summary(summary, "TECH")
+
+    assert len(selected) == 1
+    assert selected.loc[0, "sector"] == "Tech"

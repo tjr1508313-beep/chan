@@ -94,7 +94,8 @@ C:\스크리닝\
 - `screening.sector.screen_build_sector_snapshot(...) -> dict`
   - universe 로드 -> 필터 -> 지수 lag 정합성 -> 전체 RS 랭킹 -> 섹터 요약/멤버 생성까지 UI 없이 실행
   - 한국 종목은 기존 metadata.sector가 비어 있어도 `kr_get_sector()`로 CSV 매핑을 snapshot metadata에 overlay
-  - CLI: `py scripts/show_sector_rs.py --index-code KS11 --period 20 --csv-dir out`
+  - `screen_select_sector_summary()` / `screen_select_sector_members()` 로 특정 섹터만 조회 가능
+  - CLI: `py scripts/show_sector_rs.py --index-code KS11 --period 20 --sector 반도체 --csv-dir out`
 
 ### `screening/ui.py` (UI)
 - `render_screening_page()` — 미국/한국 한 화면 위·아래 배치 진입점
@@ -177,6 +178,7 @@ C:\스크리닝\
   - `scripts/build_kr_sector_map.py --max-rows 500 --apply` 로 시총 상위 500개 중 이름 규칙에 걸린 192개 초안 저장.
 - `screening/sector.py`와 `scripts/show_sector_rs.py` 추가:
   - Streamlit UI 없이 `screen_build_sector_snapshot()`로 섹터 요약과 섹터 내부 주도주를 산출.
+  - 특정 섹터만 볼 수 있도록 `screen_select_sector_members()`와 CLI `--sector` 옵션 제공.
   - 기본 필터는 기존 UI 정책과 동일하게 미국/한국별로 분리.
   - universe cache가 비어 있으면 기존 FDR/yfinance 목록 로더로 fallback 후 cache 저장.
   - 한국 섹터는 snapshot 단계에서 CSV 매핑을 overlay하므로 메타 캐시를 전부 새로 만들지 않아도 반영됨.

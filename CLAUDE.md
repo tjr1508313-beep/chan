@@ -34,6 +34,7 @@
   - 현재 CSV는 name-rule 기반 초안이므로 틀린 섹터는 사용하면서 수동 보정
 - UI 연결 전에도 `screening.sector.screen_build_sector_snapshot()` 또는
   `py scripts/show_sector_rs.py --index-code KS11 --period 20` 로 섹터 요약과 섹터 내부 주도주를 확인 가능
+  - 특정 섹터만 볼 때는 `--sector 반도체` 옵션 사용
   - 한국은 기존 DB metadata의 sector가 비어 있어도 `data/kr_sector_map.csv`를 스냅샷 단계에서 덮어씌워 즉시 반영
 
 ## 개발 단계

@@ -16,7 +16,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from screening.sector import screen_build_sector_snapshot  # noqa: E402
+from screening.sector import (  # noqa: E402
+    screen_build_sector_snapshot,
+    screen_select_sector_members,
+    screen_select_sector_summary,
+)
 
 
 def _pct(value: object) -> str:
@@ -31,7 +35,48 @@ def _num(value: object, digits: int = 2) -> str:
     return f"{float(value):,.{digits}f}"
 
 
-def _print_summary(snapshot: dict, top_sectors: int, top_members: int) -> None:
+def _print_sector(snapshot: dict, sector: str, top_members: int) -> None:
+    summary = screen_select_sector_summary(snapshot["sector_summary"], sector)
+    members = screen_select_sector_members(
+        snapshot["sector_members"], sector, top_n=top_members
+    )
+
+    print(f"\nSector: {sector}")
+    if summary.empty:
+        print("No matching sector summary row.")
+    else:
+        row = summary.iloc[0]
+        print(
+            "Summary: "
+            f"rank={int(row['rank'])}, "
+            f"score={_pct(row['sector_score'])}, "
+            f"positive={_pct(row['positive_ratio'])}, "
+            f"stocks={int(row['stock_count']):,}, "
+            f"top={row['top_ticker']} {row['top_name']}"
+        )
+
+    if members.empty:
+        print("No matching sector members.")
+        return
+
+    print("Members")
+    for member in members.itertuples(index=False):
+        name = member.name_kr or member.name_en or ""
+        print(
+            f"  {int(member.rank_in_sector):>2}. {member.ticker} {name} "
+            f"return={_pct(member.return_n)} "
+            f"rs={_num(member.rs, 4)} "
+            f"weighted={_num(member.rs_weighted, 4)}"
+        )
+
+
+def _print_summary(
+    snapshot: dict,
+    top_sectors: int,
+    top_members: int,
+    *,
+    sector: str | None = None,
+) -> None:
     summary = snapshot["sector_summary"]
     members = snapshot["sector_members"]
     stats = snapshot["filter_stats"]
@@ -50,6 +95,10 @@ def _print_summary(snapshot: dict, top_sectors: int, top_members: int) -> None:
 
     if summary.empty:
         print("\nNo sector summary rows.")
+        return
+
+    if sector:
+        _print_sector(snapshot, sector, top_members)
         return
 
     print("\nTop sectors")
@@ -110,6 +159,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Limit tickers for quick backend checks",
     )
+    parser.add_argument(
+        "--sector",
+        default=None,
+        help="Print only this sector's summary and members",
+    )
     parser.add_argument("--csv-dir", default=None, help="Directory for summary/members CSV")
     return parser.parse_args(argv)
 
@@ -123,7 +177,12 @@ def main(argv: list[str] | None = None) -> int:
         min_sector_size=args.min_sector_size,
         max_tickers=args.max_tickers,
     )
-    _print_summary(snapshot, args.top_sectors, args.top_members)
+    _print_summary(
+        snapshot,
+        args.top_sectors,
+        args.top_members,
+        sector=args.sector,
+    )
     _save_csv(snapshot, args.csv_dir)
     return 0
 

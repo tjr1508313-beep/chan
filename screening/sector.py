@@ -12,6 +12,9 @@ import pandas as pd
 
 from .cache import cache_load_universe, cache_save_universe
 from .core import (
+    _RANK_DF_COLUMNS,
+    _SECTOR_MEMBER_COLUMNS,
+    _SECTOR_SUMMARY_COLUMNS,
     screen_apply_filters,
     screen_build_screening_df,
     screen_build_sector_rankings,
@@ -144,10 +147,65 @@ def _empty_snapshot(
         "universe_source": universe_source,
         "universe_count": int(universe_count),
         "input_count": int(input_count),
-        "ranked": pd.DataFrame(),
-        "sector_summary": pd.DataFrame(),
-        "sector_members": pd.DataFrame(),
+        "ranked": pd.DataFrame(columns=_RANK_DF_COLUMNS),
+        "sector_summary": pd.DataFrame(columns=_SECTOR_SUMMARY_COLUMNS),
+        "sector_members": pd.DataFrame(columns=_SECTOR_MEMBER_COLUMNS),
     }
+
+
+def screen_select_sector_members(
+    sector_members: pd.DataFrame,
+    sector: str,
+    *,
+    top_n: int | None = None,
+    case_sensitive: bool = False,
+) -> pd.DataFrame:
+    """Return the leaders for one sector from a sector snapshot members table."""
+    if sector_members is None or sector_members.empty:
+        return pd.DataFrame(columns=_SECTOR_MEMBER_COLUMNS)
+    if "sector" not in sector_members.columns:
+        raise ValueError("sector_members에 'sector' 컬럼이 필요합니다.")
+
+    target = str(sector).strip()
+    if not target:
+        return pd.DataFrame(columns=sector_members.columns)
+
+    sector_values = sector_members["sector"].fillna("").astype(str).str.strip()
+    if case_sensitive:
+        selected = sector_members[sector_values == target].copy()
+    else:
+        selected = sector_members[sector_values.str.casefold() == target.casefold()].copy()
+
+    selected = selected.sort_values(
+        ["rank_in_sector"], ascending=[True], kind="mergesort"
+    ).reset_index(drop=True)
+    if top_n is not None:
+        selected = selected.head(max(int(top_n), 0))
+    return selected
+
+
+def screen_select_sector_summary(
+    sector_summary: pd.DataFrame,
+    sector: str,
+    *,
+    case_sensitive: bool = False,
+) -> pd.DataFrame:
+    """Return the summary row for one sector from a sector snapshot summary table."""
+    if sector_summary is None or sector_summary.empty:
+        return pd.DataFrame(columns=_SECTOR_SUMMARY_COLUMNS)
+    if "sector" not in sector_summary.columns:
+        raise ValueError("sector_summary에 'sector' 컬럼이 필요합니다.")
+
+    target = str(sector).strip()
+    if not target:
+        return pd.DataFrame(columns=sector_summary.columns)
+
+    sector_values = sector_summary["sector"].fillna("").astype(str).str.strip()
+    if case_sensitive:
+        return sector_summary[sector_values == target].copy().reset_index(drop=True)
+    return sector_summary[
+        sector_values.str.casefold() == target.casefold()
+    ].copy().reset_index(drop=True)
 
 
 def screen_build_sector_snapshot(
