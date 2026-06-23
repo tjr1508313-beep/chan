@@ -66,6 +66,7 @@ from .core import (
 from .data import us_get_nasdaq_tickers, us_get_sp500_tickers
 from .data_kr import kr_get_kosdaq_tickers, kr_get_kospi_tickers
 from .drive_upload import drive_upload_configured, upload_watchlist_to_drive
+from .sector import screen_build_sector_snapshot, screen_select_sector_members
 from .theme import (
     COLOR_BORDER,
     COLOR_CARD,
@@ -156,6 +157,26 @@ def ui_load_ranked_df(
         ]
         ranked = ranked.merge(meta_cols, left_on="ticker", right_index=True, how="left")
     return ranked, stats
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def ui_load_sector_snapshot(
+    index_code: str,
+    rs_period: int,
+    filter_config: dict,
+    tickers_tuple: tuple[str, ...],
+    top_n_per_sector: int = 5,
+    min_sector_size: int = 1,
+) -> dict:
+    return screen_build_sector_snapshot(
+        index_code=index_code,
+        period=rs_period,
+        top_n_per_sector=top_n_per_sector,
+        min_sector_size=min_sector_size,
+        tickers=list(tickers_tuple),
+        max_lag_days=0,
+        filter_config=filter_config,
+    )
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -928,6 +949,7 @@ def _render_refresh_progress(spec: dict, job: dict) -> None:
 def _render_refresh_result(spec: dict, job: dict) -> None:
     if not job.get("cache_cleared"):
         ui_load_ranked_df.clear()
+        ui_load_sector_snapshot.clear()
         ui_load_chart_df.clear()
         ui_load_index_chart_df.clear()
         job["cache_cleared"] = True
@@ -1698,6 +1720,172 @@ def _render_chart_metrics(spec: dict, df: pd.DataFrame, atr9: pd.Series) -> None
 
 # ─── 섹션 엔트리 ────────────────────────────────────────────────────
 
+def _sector_pct(value: object, *, signed: bool = False) -> str:
+    if value is None:
+        return "-"
+    try:
+        if pd.isna(value):
+            return "-"
+        number = float(value) * 100.0
+    except (TypeError, ValueError):
+        return "-"
+    sign = "+" if signed and number >= 0 else ""
+    return f"{sign}{number:.2f}%"
+
+
+def _sector_num(value: object, digits: int = 3) -> str:
+    if value is None:
+        return "-"
+    try:
+        if pd.isna(value):
+            return "-"
+        return f"{float(value):,.{digits}f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _format_sector_summary(summary: pd.DataFrame, limit: int = 12) -> pd.DataFrame:
+    if summary is None or summary.empty:
+        return pd.DataFrame()
+    rows = []
+    for row in summary.head(limit).itertuples(index=False):
+        rows.append(
+            {
+                "순위": int(row.rank),
+                "섹터": row.sector,
+                "섹터점수": _sector_pct(row.sector_score, signed=True),
+                "양수비율": _sector_pct(row.positive_ratio),
+                "종목수": int(row.stock_count),
+                "1등 종목": f"{row.top_ticker} {row.top_name}".strip(),
+                "RS가중": _sector_num(row.top_rs_weighted, 3),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _format_sector_members(spec: dict, members: pd.DataFrame) -> pd.DataFrame:
+    if members is None or members.empty:
+        return pd.DataFrame()
+    rows = []
+    for row in members.itertuples(index=False):
+        name = _first_valid_name(row.name_kr, row.name_en, row.ticker)
+        avg_tv = row.avg_traded_value_20d
+        rows.append(
+            {
+                "순위": int(row.rank_in_sector),
+                spec["ticker_col_label"]: row.ticker,
+                "종목명": name,
+                "수익률": _sector_pct(row.return_n, signed=True),
+                "RS": _sector_num(row.rs, 4),
+                "RS가중": _sector_num(row.rs_weighted, 3),
+                "현재가": spec["price_chart_fmt"](row.last_price),
+                spec["dv_label"]: (
+                    _sector_num(avg_tv / spec["dv_divisor"], 1)
+                    if pd.notna(avg_tv)
+                    else "-"
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _render_sector_panel(
+    spec: dict,
+    index_code: str,
+    rs_period: int,
+    filter_config: dict,
+    tickers: list[str],
+) -> None:
+    with st.expander("섹터 분석 · 주도섹터와 섹터 내부 주도주", expanded=False):
+        if not tickers:
+            st.caption("구성 종목 캐시가 없어 섹터 분석을 계산할 수 없습니다.")
+            return
+
+        enabled = st.checkbox(
+            "섹터 분석 계산",
+            value=False,
+            key=_key(spec, "sector_enabled"),
+            help="체크하면 현재 필터를 통과한 전체 종목으로 섹터 강도와 섹터 내부 주도주를 계산합니다.",
+        )
+        if not enabled:
+            st.caption("체크하면 현재 지수/필터 기준의 주도섹터와 섹터 내부 주도주를 계산합니다.")
+            return
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            top_members = st.number_input(
+                "섹터 점수 상위 종목 수",
+                min_value=1,
+                max_value=10,
+                value=5,
+                step=1,
+                key=_key(spec, "sector_top_members"),
+                help="섹터 점수 = 섹터 내부 상위 N개 종목 수익률 평균",
+            )
+        with c2:
+            min_sector_size = st.number_input(
+                "최소 섹터 종목 수",
+                min_value=1,
+                max_value=20,
+                value=1,
+                step=1,
+                key=_key(spec, "sector_min_size"),
+            )
+
+        with st.spinner("섹터 강도 계산 중..."):
+            snapshot = ui_load_sector_snapshot(
+                index_code=index_code,
+                rs_period=rs_period,
+                filter_config=filter_config,
+                tickers_tuple=tuple(tickers),
+                top_n_per_sector=int(top_members),
+                min_sector_size=int(min_sector_size),
+            )
+
+        summary = snapshot.get("sector_summary", pd.DataFrame())
+        members = snapshot.get("sector_members", pd.DataFrame())
+        stats = snapshot.get("filter_stats", {})
+
+        st.caption(
+            f"필터 통과 {stats.get('final', 0):,}개 · "
+            f"RS 계산 {len(snapshot.get('ranked', pd.DataFrame())):,}개 · "
+            f"섹터 {len(summary):,}개"
+        )
+
+        if summary is None or summary.empty:
+            st.info("섹터 요약을 만들 수 있는 종목이 없습니다.")
+            return
+
+        st.dataframe(
+            _format_sector_summary(summary),
+            use_container_width=True,
+            hide_index=True,
+            height=min(420, 38 * min(len(summary), 12) + 38),
+        )
+
+        sector_options = summary["sector"].astype(str).tolist()
+        selected_sector = st.selectbox(
+            "섹터 내부 주도주 보기",
+            options=sector_options,
+            key=_key(spec, "selected_sector"),
+        )
+        selected_members = screen_select_sector_members(
+            members,
+            selected_sector,
+            top_n=int(max(top_members, 1) * 2),
+        )
+        member_view = _format_sector_members(spec, selected_members)
+        if member_view.empty:
+            st.caption("선택한 섹터의 종목이 없습니다.")
+        else:
+            st.dataframe(
+                member_view,
+                use_container_width=True,
+                hide_index=True,
+                height=min(420, 38 * len(member_view) + 38),
+            )
+
+
 def _render_screening_section(spec: dict, settings: tuple) -> None:
     index_code, rs_period, top_n, filter_config = settings
 
@@ -1752,6 +1940,8 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
                 "종목 및 지수 시세 캐시를 새로고침해주세요."
             )
         return
+
+    _render_sector_panel(spec, index_code, rs_period, filter_config, tickers)
 
     selected_ticker = _render_ranking_table(spec, ranked, rs_period, index_code)
     if selected_ticker is not None:

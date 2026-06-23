@@ -107,6 +107,8 @@ C:\스크리닝\
 - 공유 헬퍼: `_render_screening_section`, `_render_sidebar`, `_render_rs_header`,
   `_render_pipeline_badge`, `_render_filter_summary`, `_render_ranking_table`,
   `_render_chart`, `_render_chart_metrics`, `_sort_tickers_stale_first`
+- 각 RS Top 테이블 위 `섹터 분석 · 주도섹터와 섹터 내부 주도주` expander에서 현재 지수/기간/필터 기준 섹터 요약과 선택 섹터 내부 주도주 표시
+  - `섹터 분석 계산` 체크박스를 켠 경우에만 전체 필터 통과 종목으로 `screen_build_sector_snapshot()` 실행
 - 차트: `streamlit-lightweight-charts-pro` 의 `Chart(series=[Candle+MA5/20/60+ATR])`
   로 통합. 5 시리즈 / 2 pane(price:ATR = 3:1) — 2026-05-18 Plotly 에서 교체
 
@@ -190,6 +192,11 @@ C:\스크리닝\
   - `scripts/build_kr_sector_map_ls.py --apply` 실행.
   - 기존 192개 `name-rule` 행을 보존하고, LS 공식 업종 `ls-industry` 2,434개를 추가해 총 2,626개 저장.
   - 코스피 스냅샷 기준 필터 통과 124개 중 미분류는 2개까지 감소.
+- Streamlit 섹터 UI 연결 (2026-06-23):
+  - `_render_sector_panel()` 추가. 미국/한국 각각 RS 랭킹 테이블 바로 위 expander에서 확인.
+  - 요약 테이블: 순위, 섹터, 섹터점수, 양수비율, 종목수, 1등 종목, RS가중.
+  - 섹터 선택 시 해당 섹터 내부 주도주를 별도 표로 표시.
+  - 초기 화면 속도 보호를 위해 사용자가 `섹터 분석 계산`을 체크한 경우에만 계산.
 
 ## 테스트 상태
 - Phase 1 미국 (2026-04-21): 전체 파이프라인 스모크 OK — AAPL/MSFT/NVDA/BABA + ^IXIC, NVDA(1.335) > AAPL(0.794) > MSFT(0.744), BABA 중국 필터 제외

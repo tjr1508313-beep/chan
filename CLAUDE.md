@@ -33,7 +33,8 @@
   - `scripts/build_kr_sector_map.py`가 시총 상위 종목을 이름 규칙으로 분류해 1차 매핑 후보를 생성
   - `scripts/build_kr_sector_map_ls.py`가 LS증권 `t8424`/`t1516` 업종 API로 미분류 종목을 공식 업종명으로 보강
   - 현재 CSV는 name-rule 기반 초안이므로 틀린 섹터는 사용하면서 수동 보정
-- UI 연결 전에도 `screening.sector.screen_build_sector_snapshot()` 또는
+- Streamlit 화면에서는 각 미국/한국 RS Top 테이블 위의 `섹터 분석 · 주도섹터와 섹터 내부 주도주` expander를 열고 `섹터 분석 계산`을 체크해 확인
+- UI 밖에서도 `screening.sector.screen_build_sector_snapshot()` 또는
   `py scripts/show_sector_rs.py --index-code KS11 --period 20` 로 섹터 요약과 섹터 내부 주도주를 확인 가능
   - 특정 섹터만 볼 때는 `--sector 반도체` 옵션 사용
   - 한국은 기존 DB metadata의 sector가 비어 있어도 `data/kr_sector_map.csv`를 스냅샷 단계에서 덮어씌워 즉시 반영
@@ -44,7 +45,7 @@
 - **Phase 1** (미국주식 MVP) ✅ 완료
 - **Phase 2** (한국주식 확장) ✅ 완료
 - **Phase 3** (매매일지 통합) — 사용자 담당
-- **섹터 RS 확장** — 백엔드부터 진행 중. 섹터별 강도와 섹터 내부 주도주를 함께 산출.
+- **섹터 RS 확장** — 백엔드/CLI/Streamlit 1차 연결 완료. 섹터별 강도와 섹터 내부 주도주를 함께 산출.
 
 ### 자동 갱신
 GitHub Actions가 평일 캐시 DB를 자동 갱신 후 `data-cache` 브랜치에 push. 갱신 범위 = 지수 + 시세 + 메타(TTL 7일 증분) + 첫 화면 지수 차트 스냅샷.
