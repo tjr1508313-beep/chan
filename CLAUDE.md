@@ -33,6 +33,7 @@
   - `scripts/build_kr_sector_map.py`가 시총 상위 종목을 이름 규칙으로 분류해 1차 매핑 후보를 생성
   - `scripts/build_kr_sector_map_ls.py`가 LS증권 `t8424`/`t1516` 업종 API로 미분류 종목을 공식 업종명으로 보강
   - 현재 CSV는 name-rule 기반 초안이므로 틀린 섹터는 사용하면서 수동 보정
+- LS증권 TR 코드/사용 예시는 `docs/ls-openapi-programgarden-reference.md`의 Programgarden Finance 참고 자료도 함께 확인
 - Streamlit 화면에서는 각 미국/한국 RS Top 테이블 위의 `섹터 분석 · 주도섹터와 섹터 내부 주도주` expander를 열고 `섹터 분석 계산`을 체크해 확인
 - UI 밖에서도 `screening.sector.screen_build_sector_snapshot()` 또는
   `py scripts/show_sector_rs.py --index-code KS11 --period 20` 로 섹터 요약과 섹터 내부 주도주를 확인 가능
