@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import json
-import math
 import threading
 import time
 from pathlib import Path
@@ -2254,10 +2253,13 @@ def _ensure_basket() -> list:
 
 def _basket_add(ticker: str, name: str, spec_code: str, price: float, atr9: float) -> None:
     basket = _ensure_basket()
-    if not any(item["ticker"] == ticker for item in basket):
-        basket.append({"ticker": ticker, "name": name, "spec_code": spec_code,
-                       "price": price, "atr9": atr9})
-        _save_prefs()
+    if any(item["ticker"] == ticker for item in basket):
+        return
+    if sum(1 for i in basket if i.get("spec_code") == spec_code) >= 5:
+        return  # 시장별 최대 5종목
+    basket.append({"ticker": ticker, "name": name, "spec_code": spec_code,
+                   "price": price, "atr9": atr9})
+    _save_prefs()
 
 
 def _basket_remove(ticker: str) -> None:
