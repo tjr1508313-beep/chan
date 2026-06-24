@@ -37,6 +37,7 @@ from streamlit_lightweight_charts_pro import (
 )
 
 from .batch import screen_refresh_index, screen_refresh_meta, screen_refresh_prices
+from .betting import compute_bet_rows
 from .batch_kr import (
     screen_refresh_index_kr,
     screen_refresh_meta_kr,
@@ -2604,6 +2605,7 @@ def render_screening_page() -> None:
     """
     _load_prefs()
     st.session_state.setdefault("scr_active_tab", "kr")
+    st.session_state.setdefault("scr_bet_split", 3)
 
     active = _render_tab_bar()
     spec = _KR_SPEC if active == "kr" else _US_SPEC
@@ -2612,9 +2614,91 @@ def render_screening_page() -> None:
     index_code, rs_period, top_n = _get_inline_settings(spec)
     settings = (index_code, rs_period, top_n, filter_config)
 
-    _render_market_card(spec, settings)
-    _render_market_index_chart(spec, settings[0])
+    _render_market_tab(spec, settings)
+
+
+def _render_market_tab(spec: dict, settings: tuple) -> None:
+    """ㄴ자 레이아웃: 좌상=지수카드/차트, 우상=베팅설정, 전폭 밴드, 스크리닝 섹션."""
+    top_l, top_r = st.columns([1.5, 1], gap="medium")
+    with top_l:
+        _render_market_card(spec, settings)
+        _render_market_index_chart(spec, settings[0])
+    with top_r:
+        _render_betting_panel(spec, position="settings")
+    _render_betting_panel(spec, position="band")
     _render_screening_section(spec, settings)
+
+
+def _render_betting_panel(spec: dict, *, position: str) -> None:
+    """베팅 패널 렌더링.
+
+    position="settings": 우상단 컬럼 내 설정 입력 + 예산 요약.
+    position="band":     전체 폭 베팅 종목 밴드 + 합계.
+    """
+    spec_code = spec["code"]
+    basket = [b for b in _ensure_basket() if b.get("spec_code") == spec_code]
+    portfolio_won = int(st.session_state.get("scr_portfolio_value", 0)) * 10_000
+    result = compute_bet_rows(
+        basket,
+        portfolio_won=portfolio_won,
+        risk_pct=float(st.session_state.get("scr_risk_pct", 1.0)),
+        stop_n_mult=float(st.session_state.get("scr_stop_n_mult", 2.0)),
+        split_count=int(st.session_state.get("scr_bet_split", 3)),
+        fx_rate=float(st.session_state.get("scr_fx_rate", 1380.0)),
+    )
+
+    if position == "settings":
+        st.markdown("##### 베팅 설정")
+        c = st.columns(2)
+        with c[0]:
+            st.number_input("자산(만원)", min_value=0, step=1, format="%d",
+                            key="scr_portfolio_value", on_change=_save_prefs)
+            st.number_input("손절 N배", min_value=0.5, max_value=5.0, step=0.5,
+                            format="%.1f", key="scr_stop_n_mult", on_change=_save_prefs)
+        with c[1]:
+            st.number_input("리스크 %", min_value=0.1, max_value=10.0, step=0.1,
+                            format="%.1f", key="scr_risk_pct", on_change=_save_prefs)
+            st.number_input("분할 수", min_value=1, max_value=5, step=1, format="%d",
+                            key="scr_bet_split")
+        st.caption(f"총 리스크 예산 ₩{result['total_risk']:,} · 종목당 ₩{result['per_risk']:,}")
+        return
+
+    # position == "band"
+    st.markdown("##### 베팅 종목")
+    if not basket:
+        st.caption("아래 종목 리스트의 '＋담기'로 추가하세요. (최대 5)")
+        return
+    cols = st.columns(min(len(result["rows"]), 5) + 1)
+    to_remove = []
+    for i, row in enumerate(result["rows"][:5]):
+        with cols[i]:
+            cur = "₩" if row["currency"] == "KRW" else "$"
+            dec = 0 if row["currency"] == "KRW" else 2
+            stop_txt = f"{cur}{row['stop_price']:,.{dec}f}" if row["stop_price"] is not None else "—"
+            sh = row["shares"]
+            inv = f"{cur}{row['invest_native']:,.{dec}f}" if sh else "—"
+            st.markdown(
+                f"**{row['name']}**  {cur}{row['price']:,.{dec}f}<br>"
+                f"<span style='color:{COLOR_MUTED};font-size:0.78rem'>"
+                f"손절 {stop_txt} · 주당 {cur}{row['per_share_risk']:,.{dec}f}</span><br>"
+                f"<span style='color:{COLOR_PROFIT};font-weight:600'>{sh:,}주 · {inv}</span>",
+                unsafe_allow_html=True,
+            )
+            if st.button("×", key=f"scr_bet_rm_{spec_code}_{row['ticker']}"):
+                to_remove.append(row["ticker"])
+    with cols[min(len(result["rows"]), 5)]:
+        st.markdown(
+            f"**합계**<br><span style='font-size:0.8rem'>"
+            f"투자 ₩{result['total_invest_won']:,}<br>"
+            f"리스크 ₩{result['total_risk_used_won']:,}<br>"
+            f"자산대비 {result['asset_pct']*100:.1f}%<br>"
+            f"잔여 ₩{result['cash_left_won']:,}</span>",
+            unsafe_allow_html=True,
+        )
+    for t in to_remove:
+        _basket_remove(t)
+    if to_remove:
+        st.rerun()
 
 
 def _render_tab_bar() -> str:
