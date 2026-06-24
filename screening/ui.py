@@ -700,83 +700,33 @@ def _render_index_status_badge(index_code: str) -> None:
     )
 
 
-def _build_filter_config(spec: dict) -> dict:
-    """필터 위젯을 본문 expander 안에 렌더하고 filter_config dict 반환.
+def _read_filter_config(spec: dict) -> dict:
+    """세션 상태에서 필터 값을 읽어 filter_config dict 반환. 위젯 렌더링 없음.
 
-    사이드바 없이 본문 컨텍스트에서 직접 호출한다.
+    위젯이 아직 없는 첫 렌더 시에는 위젯 default 값을 그대로 사용한다.
     """
-    with st.expander("필터 설정", expanded=False):
-        min_price = st.number_input(
-            spec["min_price_label"],
-            min_value=type(spec["min_price_default"])(0),
-            max_value=spec["min_price_max"],
-            value=spec["min_price_default"],
-            step=spec["min_price_step"],
-            key=_key(spec, "filter_min_price"),
-        )
-        min_dv = st.number_input(
-            spec["min_dv_label"],
-            min_value=type(spec["min_dv_default"])(0),
-            max_value=spec["min_dv_max"],
-            value=spec["min_dv_default"],
-            step=spec["min_dv_step"],
-            key=_key(spec, "filter_min_dv"),
-            help=spec["min_dv_help"],
-        )
-        min_mc_raw = 0.0
-        if spec["show_market_cap_filter"]:
-            min_mc_input = st.number_input(
-                spec["min_marketcap_label"],
-                min_value=0,
-                max_value=spec["min_marketcap_max"],
-                value=spec["min_marketcap_default"],
-                step=spec["min_marketcap_step"],
-                key=_key(spec, "filter_min_marketcap"),
-                help=spec["min_marketcap_help"],
-            )
-            min_mc_raw = spec["min_marketcap_to_raw"](min_mc_input)
-        max_range_pct = st.slider(
-            "최근 20일 최대 일일 변동폭 한도 (%)",
-            min_value=10, max_value=100, value=50, step=5,
-            key=_key(spec, "filter_max_range_pct"),
-            help="이 값 이상 변동한 날이 있는 종목은 제외.",
-        )
-        exclude_atr_drop = st.checkbox(
-            "최근 1~2일 급락 종목 제외",
-            value=True,
-            key=_key(spec, "filter_exclude_atr_drop"),
-            help=(
-                "당일(D-0) 또는 전일(D-1) 종가 하락폭이 "
-                "9일 ATR × 임계값 이상이면 제외. "
-                "ATR 은 lookahead 방지를 위해 직전일까지의 값 사용."
-            ),
-        )
-        atr_drop_mult = st.slider(
-            "급락 한도 (9일 ATR × 배수)",
-            min_value=1.0, max_value=5.0, value=2.5, step=0.1,
-            key=_key(spec, "filter_atr_drop_mult"),
-            disabled=not exclude_atr_drop,
-            help="값이 작을수록 더 많이 거름. 기본 2.5배.",
-        )
-        exclude_china = False
-        if spec["show_china_filter"]:
-            exclude_china = st.checkbox(
-                "중국기업 제외", value=True,
-                key=_key(spec, "filter_exclude_china"),
-            )
-        if spec.get("show_risk_filter", True):
-            exclude_risk = st.checkbox(
-                "관리/위험종목 제외", value=True,
-                key=_key(spec, "filter_exclude_risk"),
-                help=(
-                    "KRX 공시 기반 관리종목/투자주의/거래정지 제외. "
-                    "위험종목 데이터를 새로고침에서 갱신해야 효과가 적용됩니다."
-                ),
-            )
-        else:
-            exclude_risk = False
-        if spec["extra_caption"]:
-            st.caption(spec["extra_caption"])
+    ss = st.session_state
+
+    min_price = ss.get(_key(spec, "filter_min_price"), spec["min_price_default"])
+    min_dv = ss.get(_key(spec, "filter_min_dv"), spec["min_dv_default"])
+
+    min_mc_raw = 0.0
+    if spec["show_market_cap_filter"]:
+        min_mc_input = ss.get(_key(spec, "filter_min_marketcap"), spec["min_marketcap_default"])
+        min_mc_raw = spec["min_marketcap_to_raw"](min_mc_input)
+
+    max_range_pct = ss.get(_key(spec, "filter_max_range_pct"), 50)
+    exclude_atr_drop = ss.get(_key(spec, "filter_exclude_atr_drop"), True)
+    atr_drop_mult = ss.get(_key(spec, "filter_atr_drop_mult"), 2.5)
+
+    exclude_china = False
+    if spec["show_china_filter"]:
+        exclude_china = ss.get(_key(spec, "filter_exclude_china"), True)
+
+    if spec.get("show_risk_filter", True):
+        exclude_risk = ss.get(_key(spec, "filter_exclude_risk"), True)
+    else:
+        exclude_risk = False
 
     return {
         "min_price": float(min_price),
@@ -787,6 +737,81 @@ def _build_filter_config(spec: dict) -> dict:
         "exclude_china": bool(exclude_china),
         "exclude_risk": bool(exclude_risk),
     }
+
+
+def _render_filter_expander(spec: dict) -> None:
+    """필터 설정 expander 위젯을 렌더한다. 값은 session_state에 저장됨(반환 없음).
+
+    컨트롤 줄(지수/기간/표시 · 필터 · 새로고침) 안에서 호출한다.
+    """
+    with st.expander("필터 설정", expanded=False):
+        st.number_input(
+            spec["min_price_label"],
+            min_value=type(spec["min_price_default"])(0),
+            max_value=spec["min_price_max"],
+            value=spec["min_price_default"],
+            step=spec["min_price_step"],
+            key=_key(spec, "filter_min_price"),
+        )
+        st.number_input(
+            spec["min_dv_label"],
+            min_value=type(spec["min_dv_default"])(0),
+            max_value=spec["min_dv_max"],
+            value=spec["min_dv_default"],
+            step=spec["min_dv_step"],
+            key=_key(spec, "filter_min_dv"),
+            help=spec["min_dv_help"],
+        )
+        if spec["show_market_cap_filter"]:
+            st.number_input(
+                spec["min_marketcap_label"],
+                min_value=0,
+                max_value=spec["min_marketcap_max"],
+                value=spec["min_marketcap_default"],
+                step=spec["min_marketcap_step"],
+                key=_key(spec, "filter_min_marketcap"),
+                help=spec["min_marketcap_help"],
+            )
+        st.slider(
+            "최근 20일 최대 일일 변동폭 한도 (%)",
+            min_value=10, max_value=100, value=50, step=5,
+            key=_key(spec, "filter_max_range_pct"),
+            help="이 값 이상 변동한 날이 있는 종목은 제외.",
+        )
+        st.checkbox(
+            "최근 1~2일 급락 종목 제외",
+            value=True,
+            key=_key(spec, "filter_exclude_atr_drop"),
+            help=(
+                "당일(D-0) 또는 전일(D-1) 종가 하락폭이 "
+                "9일 ATR × 임계값 이상이면 제외. "
+                "ATR 은 lookahead 방지를 위해 직전일까지의 값 사용."
+            ),
+        )
+        exclude_atr_drop_val = st.session_state.get(_key(spec, "filter_exclude_atr_drop"), True)
+        st.slider(
+            "급락 한도 (9일 ATR × 배수)",
+            min_value=1.0, max_value=5.0, value=2.5, step=0.1,
+            key=_key(spec, "filter_atr_drop_mult"),
+            disabled=not exclude_atr_drop_val,
+            help="값이 작을수록 더 많이 거름. 기본 2.5배.",
+        )
+        if spec["show_china_filter"]:
+            st.checkbox(
+                "중국기업 제외", value=True,
+                key=_key(spec, "filter_exclude_china"),
+            )
+        if spec.get("show_risk_filter", True):
+            st.checkbox(
+                "관리/위험종목 제외", value=True,
+                key=_key(spec, "filter_exclude_risk"),
+                help=(
+                    "KRX 공시 기반 관리종목/투자주의/거래정지 제외. "
+                    "위험종목 데이터를 새로고침에서 갱신해야 효과가 적용됩니다."
+                ),
+            )
+        if spec["extra_caption"]:
+            st.caption(spec["extra_caption"])
 
 
 def _render_filter_controls(spec: dict) -> None:
@@ -2111,6 +2136,7 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
     index_display = _index_display_name(index_code)
 
     _render_rs_header(spec, index_code, index_display, rs_period, top_n)
+    _render_filter_expander(spec)
     _render_filter_controls(spec)
 
     if stats.get("total", 0) == 0 or not tickers:
@@ -2464,8 +2490,8 @@ def _render_market_tab(spec: dict) -> None:
     # 원격 동기화 배지 — 탭 상단에 한 번 표시
     _render_remote_sync_badge()
 
-    # 필터 config 빌드 (본문 expander 안에 위젯 렌더)
-    filter_config = _build_filter_config(spec)
+    # 필터 config 읽기 — 위젯은 _render_screening_section 안 컨트롤 줄에서 렌더
+    filter_config = _read_filter_config(spec)
     index_code, rs_period, top_n = _get_inline_settings(spec)
     settings = (index_code, rs_period, top_n, filter_config)
 
