@@ -72,3 +72,39 @@ def test_exclude_risk_filters_is_risk_rows():
     assert "000002" not in out.index   # is_risk 제외
     assert "000001" in out.index       # 투자경고는 통과 (참고만)
     assert out.loc["000001", "caution_flags"] == "투자경고"
+
+
+def test_exclude_caution_filters_badge_rows():
+    """exclude_caution=True 면 caution_flags 가 있는 종목(투자경고/단기과열 등)도 제외.
+
+    섹터 점수가 초저시총 급등주로 왜곡되는 것을 막는 옵션. 기본은 False(참고만).
+    """
+    df = pd.DataFrame(
+        {
+            "last_price": [100.0, 100.0, 100.0],
+            "avg_traded_value_20d": [1e11, 1e11, 1e11],
+            "max_daily_range_20d": [0.1, 0.1, 0.1],
+            "recent_atr_drop_mult": [0.0, 0.0, 0.0],
+            "market_cap": [1e12, 1e12, 1e12],
+            "is_china": [False, False, False],
+            "is_risk": [False, False, False],
+            "caution_flags": [None, "단기과열", "투자경고,투자주의"],
+            "name_en": ["A", "B", "C"],
+            "name_kr": ["A", "B", "C"],
+            "sector": [None, None, None],
+            "country": ["South Korea", "South Korea", "South Korea"],
+        },
+        index=pd.Index(["000001", "000002", "000003"], name="ticker"),
+    )
+    base = {"min_price": 0, "min_traded_value": 0, "min_market_cap": 0,
+            "max_daily_range_pct": 1.0, "max_atr_drop_multiple": 0,
+            "exclude_china": False, "exclude_risk": True}
+
+    off, _ = core.screen_apply_filters(df, {**core._default_config(), **base})
+    assert list(off.index) == ["000001", "000002", "000003"]  # 기본은 모두 통과
+
+    on, stats = core.screen_apply_filters(
+        df, {**core._default_config(), **base, "exclude_caution": True}
+    )
+    assert list(on.index) == ["000001"]      # 배지 있는 B/C 제외
+    assert stats["after_caution"] == 1

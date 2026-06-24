@@ -63,7 +63,7 @@ html, body, .stApp {{
 
 /* ───── 배경/텍스트 ───── */
 .stApp {{ background-color: {COLOR_BG}; color: {COLOR_TEXT}; }}
-.main .block-container {{ padding-top: 2rem; padding-bottom: 3rem; max-width: 1480px; }}
+.main .block-container {{ padding-top: 0.5rem; padding-bottom: 3rem; max-width: 1480px; }}
 h1, h2, h3, h4, h5, h6 {{ color: {COLOR_TEXT} !important; letter-spacing: -0.02em; font-weight: 800; }}
 p, span, label, div {{ color: {COLOR_TEXT}; }}
 .stCaption, [data-testid="stCaptionContainer"] {{ color: {COLOR_MUTED} !important; }}
@@ -333,10 +333,48 @@ _NOTRANSLATE_JS = """
 """
 
 
+_SECTOR_CSS = """
+<style>
+.scr-sec-ribbon{display:flex;gap:5px;margin:2px 0 14px;height:62px;}
+.scr-sec-tile{border-radius:4px;padding:9px 10px;display:flex;flex-direction:column;
+  justify-content:space-between;min-width:0;overflow:hidden;}
+.scr-sec-tile .nm{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;}
+.scr-sec-tile .vl{font-size:13px;font-weight:500;}
+.scr-sec-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px;
+  font-family:Pretendard,-apple-system,'Malgun Gothic',sans-serif;}
+.scr-sec-metric{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px 18px;}
+.scr-sec-metric .lb{font-size:13px;color:#6b7280;font-weight:600;letter-spacing:-0.2px;}
+.scr-sec-metric .vl{font-size:28px;font-weight:800;margin-top:3px;letter-spacing:-0.5px;}
+.scr-sec-metric .vs{font-size:19px;font-weight:700;margin-top:6px;letter-spacing:-0.3px;}
+.scr-sec-card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;display:flex;
+  align-items:center;gap:12px;padding:12px 15px;border-left-width:4px;border-left-style:solid;}
+.scr-sec-card .chip{width:28px;height:28px;border-radius:8px;font-size:14px;font-weight:500;
+  display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.scr-sec-card .meta{flex:1;min-width:0;}
+.scr-sec-card .meta .nm{font-size:15px;font-weight:500;}
+.scr-sec-card .meta .sub{font-size:11px;color:#6b7280;margin-top:1px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.scr-sec-bar{width:54px;height:6px;border-radius:3px;background:#eef0f2;overflow:hidden;flex:0 0 auto;}
+.scr-sec-bar > i{display:block;height:100%;}
+.scr-sec-brd{font-size:11px;color:#9ca3af;white-space:nowrap;}
+.scr-sec-pill{font-size:15px;font-weight:500;border-radius:8px;padding:5px 12px;
+  min-width:64px;text-align:center;flex:0 0 auto;}
+.scr-sec-mhdr{display:flex;font-size:11px;color:#9ca3af;padding:6px 4px 4px;}
+.scr-sec-detail-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 4px 2px;margin-top:2px;border-top:1px solid #eef0f2;
+  font-family:Pretendard,-apple-system,'Malgun Gothic',sans-serif;}
+.scr-sec-detail-h .nm{font-size:19px;font-weight:800;letter-spacing:-0.3px;}
+.scr-sec-detail-h .sub{font-size:12px;color:#6b7280;}
+</style>
+"""
+
+
 def apply_theme() -> None:
     """스크리닝 앱 Toss-style 라이트 테마 CSS 주입.
 
     Chrome 자동 번역 차단(notranslate) 포함.
     """
     st.markdown(_CSS, unsafe_allow_html=True)
+    st.markdown(_SECTOR_CSS, unsafe_allow_html=True)
     components.html(_NOTRANSLATE_JS, height=0)

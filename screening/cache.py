@@ -149,6 +149,17 @@ CREATE TABLE IF NOT EXISTS stock_returns (
 )
 """
 
+# 새로고침 때 미리 계산해 저장하는 섹터 스냅샷(요약+멤버 전체). 화면은 읽기만 한다.
+_DDL_SECTOR_SNAPSHOT = """
+CREATE TABLE IF NOT EXISTS sector_snapshot (
+    scope        TEXT PRIMARY KEY,
+    period       INTEGER,
+    summary_json TEXT,
+    members_json TEXT,
+    updated_at   TEXT
+)
+"""
+
 _DDL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date)",
     "CREATE INDEX IF NOT EXISTS idx_index_prices_date ON index_prices(date)",
@@ -166,6 +177,7 @@ def init_cache() -> None:
         conn.execute(_DDL_UNIVERSE)
         conn.execute(_DDL_SCREENING_METRICS)
         conn.execute(_DDL_STOCK_RETURNS)
+        conn.execute(_DDL_SECTOR_SNAPSHOT)
         for ddl in _DDL_INDEXES:
             conn.execute(ddl)
         _migrate_dollar_volume_column(conn)
@@ -886,6 +898,68 @@ def cache_save_index_chart_snapshot(
             rows,
         )
     return len(rows)
+
+
+def cache_save_sector_snapshot(
+    scope: str, period: int, summary_df: pd.DataFrame, members_df: pd.DataFrame
+) -> bool:
+    """새로고침 때 계산한 섹터 스냅샷(요약+멤버 전체)을 JSON으로 저장."""
+    def _dump(df: pd.DataFrame) -> str:
+        if df is None or df.empty:
+            return "[]"
+        return df.to_json(orient="records", force_ascii=False)
+
+    with _connect() as conn:
+        conn.execute(_DDL_SECTOR_SNAPSHOT)
+        conn.execute("DELETE FROM sector_snapshot WHERE scope = ?", (str(scope),))
+        conn.execute(
+            "INSERT INTO sector_snapshot "
+            "(scope, period, summary_json, members_json, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (str(scope), int(period), _dump(summary_df), _dump(members_df), _utc_now_iso()),
+        )
+    return True
+
+
+def cache_load_sector_snapshot(scope: str) -> dict | None:
+    """미리 저장된 섹터 스냅샷 조회. 없으면 None (graceful)."""
+    import io
+
+    with _connect() as conn:
+        try:
+            row = conn.execute(
+                "SELECT period, summary_json, members_json, updated_at "
+                "FROM sector_snapshot WHERE scope = ?",
+                (str(scope),),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+    if not row:
+        return None
+
+    period, summary_json, members_json, updated_at = row
+
+    def _read(payload: str) -> pd.DataFrame:
+        if not payload:
+            return pd.DataFrame()
+        try:
+            # dtype=False: 타입 추론 끔 → 티커 문자열 "005930"의 앞자리 0 보존
+            df = pd.read_json(io.StringIO(payload), orient="records",
+                              dtype=False, convert_dates=False)
+        except ValueError:
+            return pd.DataFrame()
+        for col in ("ticker", "top_ticker"):
+            if col in df.columns:
+                df[col] = df[col].astype(str)
+        return df
+
+    return {
+        "scope": str(scope),
+        "period": int(period) if period is not None else None,
+        "sector_summary": _read(summary_json),
+        "sector_members": _read(members_json),
+        "updated_at": updated_at,
+    }
 
 
 def cache_load_index_chart_snapshot(

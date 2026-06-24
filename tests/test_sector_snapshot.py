@@ -265,3 +265,50 @@ def test_select_sector_summary_filters_one_sector_case_insensitively():
 
     assert len(selected) == 1
     assert selected.loc[0, "sector"] == "Tech"
+
+
+def test_combined_snapshot_merges_markets_with_per_market_rs(monkeypatch):
+    sector = _sector_module()
+    calls = _patch_pipeline(monkeypatch, sector)
+
+    snap = sector.screen_build_combined_sector_snapshot(
+        ["KS11", "KQ11"],
+        period=20,
+        top_n_per_sector=5,
+        min_sector_size=1,
+        tickers_map={"KS11": ["005930", "000660"], "KQ11": ["247540"]},
+    )
+
+    # 두 시장 ranked가 합쳐짐 (3종목)
+    assert set(snap["ranked"]["ticker"]) == {"005930", "000660", "247540"}
+
+    # RS는 각 시장 자기 지수로 계산됨 (정확)
+    rank_calls = [c for c in calls if c[0] == "rank"]
+    assert ("rank", ["005930", "000660"], "KS11", 20, None) in rank_calls
+    assert ("rank", ["247540"], "KQ11", 20, None) in rank_calls
+
+
+def test_cache_sector_snapshot_round_trip_preserves_leading_zeros(tmp_path, monkeypatch):
+    import screening.cache as cache
+
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "sector.db")
+    cache.init_cache()
+
+    summary = pd.DataFrame(
+        [{"rank": 1, "sector": "반도체", "sector_score": 0.26, "stock_count": 21,
+          "positive_ratio": 0.8, "top_ticker": "005930", "top_name": "삼성전자"}]
+    )
+    members = pd.DataFrame(
+        [{"sector": "반도체", "rank_in_sector": 1, "ticker": "005930",
+          "name_kr": "삼성전자", "return_n": 0.24, "rs": 0.04,
+          "rs_weighted": 1.8, "last_price": 70000.0, "avg_traded_value_20d": 3.2e11}]
+    )
+    cache.cache_save_sector_snapshot("KR", 20, summary, members)
+
+    loaded = cache.cache_load_sector_snapshot("KR")
+    assert loaded["period"] == 20
+    assert int(loaded["sector_summary"].iloc[0]["stock_count"]) == 21
+    # 앞자리 0 보존 (005930이 5930이 되면 안 됨)
+    assert str(loaded["sector_members"].iloc[0]["ticker"]) == "005930"
+    assert str(loaded["sector_summary"].iloc[0]["top_ticker"]) == "005930"
+    assert cache.cache_load_sector_snapshot("NOPE") is None

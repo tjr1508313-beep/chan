@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 from lightweight_charts_pro.charts.options.line_options import LineOptions
@@ -47,6 +48,7 @@ from .cache import (
     cache_load_index,
     cache_load_meta,
     cache_load_prices,
+    cache_load_sector_snapshot,
     cache_load_universe,
     cache_prune_orphan_prices,
     cache_save_universe,
@@ -66,7 +68,13 @@ from .core import (
 from .data import us_get_nasdaq_tickers, us_get_sp500_tickers
 from .data_kr import kr_get_kosdaq_tickers, kr_get_kospi_tickers
 from .drive_upload import drive_upload_configured, upload_watchlist_to_drive
-from .sector import screen_build_sector_snapshot, screen_select_sector_members
+from .sector import (
+    screen_build_combined_sector_snapshot,
+    screen_build_sector_snapshot,
+    screen_rebuild_sector_snapshot,
+    screen_select_sector_members,
+    sector_snapshot_scope,
+)
 from .theme import (
     COLOR_BORDER,
     COLOR_CARD,
@@ -176,6 +184,34 @@ def ui_load_sector_snapshot(
         tickers=list(tickers_tuple),
         max_lag_days=0,
         filter_config=filter_config,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def ui_load_stored_sector_snapshot(scope: str) -> dict | None:
+    """새로고침 때 미리 저장된 섹터 스냅샷을 DB에서 읽기만 한다 (계산 없음)."""
+    return cache_load_sector_snapshot(scope)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def ui_load_combined_sector_snapshot(
+    rs_period: int,
+    filter_config_items: tuple,
+    market_tickers: tuple,
+    top_n_per_sector: int = 5,
+    min_sector_size: int = 1,
+) -> dict:
+    """코스피+코스닥 합산 섹터 스냅샷 (시장별 RS 정확). 캐시 키용으로 인자는 hashable로 받음."""
+    filter_config = dict(filter_config_items)
+    tickers_map = {code: list(tks) for code, tks in market_tickers}
+    return screen_build_combined_sector_snapshot(
+        list(tickers_map.keys()),
+        period=rs_period,
+        top_n_per_sector=top_n_per_sector,
+        min_sector_size=min_sector_size,
+        tickers_map=tickers_map,
+        filter_config=filter_config,
+        max_lag_days=0,
     )
 
 
@@ -398,7 +434,7 @@ def _render_market_card(spec: dict, settings: tuple) -> None:
             </div>
             <span style='color:#8b95a1; font-size:12px;'>{info['end_date']}</span>
           </div>
-          <div style='display:flex; align-items:flex-end; gap:14px; margin-bottom:18px;'>
+          <div style='display:flex; align-items:flex-end; gap:14px; margin-bottom:6px;'>
             <div style='font-family:"JetBrains Mono",ui-monospace,monospace;
                         font-variant-numeric:tabular-nums;
                         font-size:30px; font-weight:800; line-height:1.1; color:#191f28;'>
@@ -413,6 +449,12 @@ def _render_market_card(spec: dict, settings: tuple) -> None:
               </span>
             </div>
           </div>
+          <div style='font-family:"JetBrains Mono",ui-monospace,monospace;
+                      font-variant-numeric:tabular-nums; color:#8b95a1;
+                      font-size:11.5px; margin-bottom:16px;'>
+            {info['start_date']} → {info['end_date']}
+            · {info['start_close']:,.2f} → {info['end_close']:,.2f}
+          </div>
           <div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;'>
             {_stat_block(f'Top {top_n} 상승', adv, COLOR_PROFIT, '개')}
             {_stat_block(f'Top {top_n} 하락', dec, COLOR_LOSS, '개')}
@@ -424,95 +466,82 @@ def _render_market_card(spec: dict, settings: tuple) -> None:
     )
 
 
-def _render_market_index_chart(spec: dict, index_code: str) -> None:
-    """카드 너비 안에 미리 계산된 최근 110일 지수 완성 봉을 표시.
+def _index_chart_svg(df: pd.DataFrame, height: int = 190) -> str:
+    """지수 OHLC를 정적 SVG 캔들(+MA5)로 그린다.
 
-    대화형 lightweight-charts 차트(십자선/줌). handle_response 를 비활성해
-    components.html(height=0) 고스트 삽입을 막으면, 종목 차트와 함께 여러
-    iframe 차트가 한 화면에 공존해도 서로를 밀어내지 않고 대화형도 유지된다.
-    (십자선·줌은 iframe 내부 클라이언트 동작이라 handle_response 와 무관)
+    lightweight-charts iframe은 다른 위젯 클릭(리런)으로 DOM이 크게 바뀌면
+    사라지는 문제가 있어, 첫 화면 미니차트는 항상 떠 있는 정적 SVG로 그린다.
+    """
+    o = pd.to_numeric(df["Open"], errors="coerce").to_numpy(dtype=float)
+    h = pd.to_numeric(df["High"], errors="coerce").to_numpy(dtype=float)
+    low = pd.to_numeric(df["Low"], errors="coerce").to_numpy(dtype=float)
+    c = pd.to_numeric(df["Close"], errors="coerce").to_numpy(dtype=float)
+    hi_arr = np.nanmax(np.vstack([o, h, low, c]), axis=0)
+    lo_arr = np.nanmin(np.vstack([o, h, low, c]), axis=0)
+    n = len(c)
+    if n < 2:
+        return ""
+
+    W, H = 600.0, float(height)
+    pad_t, pad_b, pad_x = 8.0, 8.0, 4.0
+    hi, lo = float(np.nanmax(hi_arr)), float(np.nanmin(lo_arr))
+    if not (hi > lo):
+        hi, lo = lo + 1.0, lo
+    plot_w, plot_h = W - 2 * pad_x, H - pad_t - pad_b
+    step = plot_w / n
+    bw = max(1.4, step * 0.62)
+
+    def y(v: float) -> float:
+        return pad_t + (hi - v) / (hi - lo) * plot_h
+
+    parts = [
+        f"<svg viewBox='0 0 {W:.0f} {H:.0f}' width='100%' height='{int(H)}' "
+        "preserveAspectRatio='none' style='display:block;'>"
+    ]
+    for i in range(n):
+        if np.isnan(c[i]):
+            continue
+        x = pad_x + step * (i + 0.5)
+        up = c[i] >= o[i]
+        col = _COLOR_UP if up else _COLOR_DOWN
+        top, bot = y(max(o[i], c[i])), y(min(o[i], c[i]))
+        parts.append(
+            f"<line x1='{x:.1f}' y1='{y(hi_arr[i]):.1f}' x2='{x:.1f}' "
+            f"y2='{y(lo_arr[i]):.1f}' stroke='{col}' stroke-width='0.8'/>"
+        )
+        parts.append(
+            f"<rect x='{x - bw / 2:.1f}' y='{top:.1f}' width='{bw:.1f}' "
+            f"height='{max(0.7, bot - top):.1f}' fill='{col}'/>"
+        )
+    ma = pd.Series(c).rolling(5).mean().to_numpy()
+    pts = [
+        f"{pad_x + step * (i + 0.5):.1f},{y(ma[i]):.1f}"
+        for i in range(n) if not np.isnan(ma[i])
+    ]
+    if len(pts) > 1:
+        parts.append(
+            f"<polyline fill='none' stroke='{_COLOR_MA5}' stroke-width='1.3' "
+            f"points='{' '.join(pts)}'/>"
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _render_market_index_chart(spec: dict, index_code: str) -> None:
+    """카드 너비 안에 미리 계산된 최근 110일 지수 완성 봉을 정적 SVG로 표시.
+
+    정적 SVG라 다른 클릭(섹터 타일 등)으로 리런돼도 차트가 사라지지 않는다.
+    (대화형 lightweight-charts 는 iframe 공존/리런 시 사라지는 문제가 있어 제외)
     """
     df = ui_load_index_chart_df(index_code)
     if df is None or df.empty:
         st.caption("지수 차트는 다음 데이터 새로고침 후 표시됩니다.")
         return
 
-    view_times = df.index.tz_localize("UTC")
-    candle_df = pd.DataFrame(
-        {
-            "time": view_times,
-            "open": df["Open"].values,
-            "high": df["High"].values,
-            "low": df["Low"].values,
-            "close": df["Close"].values,
-        }
-    ).dropna()
-    if candle_df.empty:
+    svg = _index_chart_svg(df, height=190)
+    if not svg:
         return
-
-    ohlc = candle_df[["open", "high", "low", "close"]]
-    candle_df["high"] = ohlc.max(axis=1)
-    candle_df["low"] = ohlc.min(axis=1)
-
-    precision = int(spec.get("chart_price_precision", 2))
-    min_move = float(spec.get("chart_price_min_move", 0.01))
-    price_fmt = PriceFormatOptions(type="price", precision=precision, min_move=min_move)
-
-    candle = CandlestickSeries(
-        data=candle_df,
-        column_mapping={
-            "time": "time",
-            "open": "open",
-            "high": "high",
-            "low": "low",
-            "close": "close",
-        },
-        pane_id=0,
-    )
-    candle.up_color = _COLOR_UP
-    candle.down_color = _COLOR_DOWN
-    candle.border_up_color = _COLOR_UP
-    candle.border_down_color = _COLOR_DOWN
-    candle.wick_up_color = _COLOR_UP
-    candle.wick_down_color = _COLOR_DOWN
-    candle.price_format = price_fmt
-
-    ma5_df = pd.DataFrame({
-        "time": candle_df["time"],
-        "value": candle_df["close"].rolling(5).mean(),
-    }).dropna(subset=["value"])
-    ma5_line = LineSeries(
-        data=ma5_df,
-        column_mapping={"time": "time", "value": "value"},
-        pane_id=0,
-    )
-    ma5_line.line_options = LineOptions(color=_COLOR_MA5, line_width=1, line_visible=True)
-    ma5_line.price_format = price_fmt
-
-    chart = Chart(
-        series=[candle, ma5_line],
-        options=ChartOptions(
-            height=190,
-            layout=LayoutOptions(
-                text_color=COLOR_MUTED,
-                font_size=10,
-                font_family=(
-                    "Pretendard, -apple-system, BlinkMacSystemFont, "
-                    "'Segoe UI', Roboto, sans-serif"
-                ),
-            ),
-            time_scale=TimeScaleOptions(time_visible=False, seconds_visible=False),
-            localization=LocalizationOptions(locale="ko-KR", date_format="yy.MM.dd"),
-        ),
-    )
-    chart_key = f"lwc_market_index_{spec['code']}_{index_code}"
-    _ss_key = f"_chart_series_configs_{chart_key}"
-    if _ss_key in st.session_state:
-        del st.session_state[_ss_key]
-    # handle_response 비활성: 고스트 components.html(height=0) 삽입 차단.
-    # 차트 표시·십자선·줌은 영향 없음(클라이언트 동작). 갭/사라짐만 제거.
-    chart._chart_renderer.handle_response = lambda *args, **kwargs: None
-    chart.render(key=chart_key)
+    st.markdown(svg, unsafe_allow_html=True)
     st.caption(
         f"최근 {len(df)}일 완성 봉 · 마지막 봉 {df.index[-1].strftime('%Y-%m-%d')}"
     )
@@ -855,6 +884,14 @@ def _refresh_worker(
             f"미리 계산: 종목={computed['metrics']}, 수익률={computed['returns']}"
         )
 
+        job["phase"] = "섹터 미리 계산"
+        try:
+            sector_saved = screen_rebuild_sector_snapshot(spec["code"])
+            ui_load_stored_sector_snapshot.clear()
+            job["messages"].append(f"섹터 저장: {sector_saved}")
+        except Exception as se:  # noqa: BLE001
+            job["messages"].append(f"섹터 계산 건너뜀: {se}")
+
         job["phase"] = "완료"
     except Exception as e:
         job["error"] = str(e)
@@ -1010,56 +1047,34 @@ def _render_refresh_section(spec: dict, index_code: str) -> None:
 def _render_rs_header(
     spec: dict, index_code: str, index_display: str, rs_period: int, top_n: int
 ) -> None:
-    info = _get_index_period_info(index_code, rs_period)
+    # 기간/종가 상세는 상단 시장 카드로 병합됨. 여기는 지수/기간/표시 컨트롤만.
     index_options = spec["indices"]
 
-    title_col, ctrl_col, info_col = st.columns([1.4, 2.6, 1.8])
-
-    with title_col:
-        st.markdown(f"### RS Top {top_n}")
-
-    with ctrl_col:
-        c1, c2, c3 = st.columns([2, 1, 1])
-        with c1:
-            st.selectbox(
-                "지수",
-                options=list(index_options.keys()),
-                key=_key(spec, "selected_index"),
-            )
-        with c2:
-            st.number_input(
-                "기간(일)",
-                min_value=5, max_value=60,
-                value=20,
-                step=1,
-                key=_key(spec, "rs_period"),
-                help="RS = 종목 N일 수익률 - 지수 N일 수익률",
-            )
-        with c3:
-            st.number_input(
-                "표시(개)",
-                min_value=10, max_value=50,
-                value=20,
-                step=5,
-                key=_key(spec, "top_n"),
-                help="랭킹 테이블에 표시할 상위 종목 수",
-            )
-
-    with info_col:
-        if info is not None:
-            sign = "+" if info["return_pct"] >= 0 else ""
-            color = COLOR_PROFIT if info["return_pct"] >= 0 else COLOR_LOSS
-            st.markdown(
-                f"<div style='text-align:right;'>"
-                f"<div style='color:{color}; font-weight:700; font-size:1.05rem;'>"
-                f"{index_display} {rs_period}일: {sign}{info['return_pct']:.2f}%"
-                f"</div>"
-                f"<div style='color:{COLOR_MUTED}; font-size:0.78rem; margin-top:2px;'>"
-                f"{info['start_date']} → {info['end_date']} "
-                f"({info['start_close']:,.2f} → {info['end_close']:,.2f})"
-                f"</div></div>",
-                unsafe_allow_html=True,
-            )
+    c1, c2, c3, _spacer = st.columns([2, 1, 1, 2.2])
+    with c1:
+        st.selectbox(
+            "지수",
+            options=list(index_options.keys()),
+            key=_key(spec, "selected_index"),
+        )
+    with c2:
+        st.number_input(
+            "기간(일)",
+            min_value=5, max_value=60,
+            value=20,
+            step=1,
+            key=_key(spec, "rs_period"),
+            help="RS = 종목 N일 수익률 - 지수 N일 수익률",
+        )
+    with c3:
+        st.number_input(
+            "표시(개)",
+            min_value=10, max_value=50,
+            value=20,
+            step=5,
+            key=_key(spec, "top_n"),
+            help="랭킹 테이블에 표시할 상위 종목 수 (전체 RS 보기)",
+        )
 
     st.caption(f"RS = 종목 {rs_period}일 수익률 - 지수 {rs_period}일 수익률")
 
@@ -1789,101 +1804,296 @@ def _format_sector_members(spec: dict, members: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _render_sector_panel(
+_SECTOR_TINT_SCALE = 0.18  # 이 수익률(=18%)에서 색 강도 최대
+_SECTOR_BENCH_GAP = 0.05  # 코스피 기준 -5%p 미만 종목은 섹터 펼침에서 제외
+
+
+def _index_period_return(index_code: str, period: int) -> float | None:
+    """지수의 period일 수익률(=end/start-1). 데이터 부족 시 None."""
+    df = cache_load_index(index_code, days=period + 10)
+    if df is None or df.empty or "Close" not in df.columns:
+        return None
+    s = df["Close"].dropna()
+    if len(s) < period + 1:
+        return None
+    start = float(s.iloc[-period - 1])
+    if start == 0:
+        return None
+    return float(s.iloc[-1]) / start - 1.0
+
+
+def _hex_blend(c1: str, c2: str, t: float) -> str:
+    t = max(0.0, min(1.0, t))
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def _sector_tint(score: object) -> dict:
+    """섹터 강도(sector_score) → 타일/배지/레일 색. 빨강=강세 / 파랑=약세."""
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        s = 0.0
+    if s != s:  # NaN
+        s = 0.0
+    intensity = min(abs(s) / _SECTOR_TINT_SCALE, 1.0)
+    if s >= 0:
+        return {
+            "tile_bg": _hex_blend("#fff5f5", "#ffd5d5", intensity),
+            "pill_bg": _hex_blend("#fff4f4", "#ffe3e3", intensity),
+            "rail": _hex_blend("#ffd0d0", "#ff4b4b", intensity),
+            "chip_bg": _hex_blend("#fff0f0", "#ff4b4b", intensity),
+            "chip_fg": "#ffffff" if intensity > 0.55 else "#c0392b",
+            "fg": "#c0392b",
+            "bar": "#ff4b4b",
+        }
+    return {
+        "tile_bg": _hex_blend("#eef6ff", "#d9ecff", intensity),
+        "pill_bg": _hex_blend("#eef6ff", "#dbecff", intensity),
+        "rail": _hex_blend("#cfe6ff", "#1a9cff", intensity),
+        "chip_bg": _hex_blend("#eef6ff", "#1a9cff", intensity),
+        "chip_fg": "#ffffff" if intensity > 0.55 else "#1a7fd0",
+        "fg": "#1a7fd0",
+        "bar": "#1a9cff",
+    }
+
+
+def _build_sector_metrics_html(summary: pd.DataFrame) -> str:
+    scores = pd.to_numeric(summary["sector_score"], errors="coerce")
+    up = int((scores > 0).sum())
+    total = int(len(summary))
+    if "avg_rs" in summary.columns and "stock_count" in summary.columns:
+        w = pd.to_numeric(summary["stock_count"], errors="coerce").fillna(0.0)
+        rs = pd.to_numeric(summary["avg_rs"], errors="coerce")
+        avg_rs = float((rs * w).sum() / w.sum()) if w.sum() else float("nan")
+    else:
+        avg_rs = float("nan")
+    top = summary.iloc[0]
+    top_fg = _sector_tint(top.sector_score)["fg"]
+    rs_fg = "#ff4b4b" if (avg_rs == avg_rs and avg_rs >= 0) else "#1a9cff"
+    return (
+        "<div class='scr-sec-metrics'>"
+        "<div class='scr-sec-metric'><div class='lb'>상승 섹터</div>"
+        f"<div class='vl'>{up}<span style='font-size:13px;color:#9ca3af;font-weight:400;'>"
+        f" / {total}</span></div></div>"
+        "<div class='scr-sec-metric'><div class='lb'>평균 RS(%p)</div>"
+        f"<div class='vl' style='color:{rs_fg};'>"
+        f"{(format(avg_rs * 100, '+.2f') if avg_rs == avg_rs else '—')}</div></div>"
+        "<div class='scr-sec-metric'><div class='lb'>최강 섹터</div>"
+        f"<div class='vs'>{top.sector} <span style='color:{top_fg};'>"
+        f"{_sector_pct(top.sector_score, signed=True)}</span></div></div>"
+        "</div>"
+    )
+
+
+def _select_sector(sel_key: str, sector: str) -> None:
+    """타일 클릭 토글: 같은 섹터 재클릭 시 닫힘(한 번에 하나만 펼침)."""
+    cur = st.session_state.get(sel_key)
+    st.session_state[sel_key] = None if cur == sector else sector
+
+
+def _build_sector_tiles_css(summary: pd.DataFrame, code: str, selected: object) -> str:
+    """섹터 그리드 타일(st.button)을 강도 색으로 칠하는 per-key CSS."""
+    parts = ["<style>"]
+    for row in summary.itertuples(index=False):
+        t = _sector_tint(row.sector_score)
+        key = f"sectile_{code}_{int(row.rank)}"
+        is_sel = str(row.sector) == str(selected)
+        border = t["rail"] if is_sel else "#eef0f2"
+        bw = "2px" if is_sel else "1px"
+        parts.append(
+            f".st-key-{key} button{{background:{t['tile_bg']}!important;"
+            f"border:{bw} solid {border}!important;border-radius:12px!important;"
+            f"min-height:88px!important;padding:12px 16px!important;display:flex!important;"
+            f"flex-direction:column!important;align-items:flex-start!important;"
+            f"justify-content:center!important;gap:4px!important;}}"
+            f".st-key-{key} button p{{color:{t['fg']}!important;text-align:left!important;"
+            f"margin:0!important;font-family:Pretendard,-apple-system,'Malgun Gothic',"
+            f"sans-serif!important;letter-spacing:-0.3px!important;}}"
+            f".st-key-{key} button p:first-child{{font-size:20px!important;"
+            f"font-weight:800!important;line-height:1.15!important;}}"
+            f".st-key-{key} button p:last-child{{font-size:15px!important;"
+            f"font-weight:700!important;line-height:1.1!important;opacity:0.92;}}"
+            f".st-key-{key} button:hover{{border-color:{t['rail']}!important;}}"
+        )
+    parts.append("</style>")
+    return "".join(parts)
+
+
+def _render_sector_detail(spec, members, sector, rs_period, summary, top_n, benchmark) -> None:
+    """펼친 섹터의 헤더 + RS Top N 멤버 표(클릭→차트).
+
+    benchmark = 코스피(또는 해당 지수) period일 수익률. 종목 절대수익률이
+    benchmark - 5%p 미만이면 제외(코스피보다 한참 못 오른 종목 숨김).
+    """
+    srow = summary[summary["sector"].astype(str) == str(sector)]
+    if not srow.empty:
+        r = srow.iloc[0]
+        t = _sector_tint(r["sector_score"])
+        leader = (str(r["top_name"]).strip() or str(r["top_ticker"])).strip()
+        st.markdown(
+            "<div class='scr-sec-detail-h'>"
+            f"<span class='nm'>{sector}</span>"
+            f"<span class='scr-sec-pill' style='background:{t['pill_bg']};color:{t['fg']};'>"
+            f"{_sector_pct(r['sector_score'], signed=True)}</span>"
+            f"<span class='sub'>{int(r['stock_count'])}종목 · 주도주 {leader} · "
+            f"양수 {round(float(r['positive_ratio']) * 100)}%</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    sel_members = screen_select_sector_members(members, str(sector), top_n=None)
+    # 코스피 수익률 기준 -5%p 미만(절대수익률)은 제외 → 그 위에서 상위 N개만
+    floor = float(benchmark) - _SECTOR_BENCH_GAP
+    if sel_members is not None and not sel_members.empty and "return_n" in sel_members.columns:
+        ret = pd.to_numeric(sel_members["return_n"], errors="coerce")
+        sel_members = sel_members[ret >= floor]
+    if top_n is not None and sel_members is not None:
+        sel_members = sel_members.head(int(top_n))
+    if sel_members is None or sel_members.empty:
+        st.caption(f"코스피 {benchmark * 100:+.1f}% 기준 -5%p 이상 오른 종목이 없습니다.")
+    else:
+        _render_sector_member_rows(spec, sel_members, rs_period)
+
+
+def _render_sector_member_rows(spec: dict, members: pd.DataFrame, rs_period: int) -> None:
+    """펼친 섹터의 RS Top N 멤버 — 종목명 클릭 시 차트(기존 픽 로직 재사용)."""
+    selected = st.session_state.get(_key(spec, "selected_ticker"))
+    widths = [0.5, 2.2, 0.85, 0.9, 1.0, 1.0]
+    labels = ["#", "종목명", "RS(%p)", "RS가중", f"{rs_period}일", spec["dv_label"]]
+    hcols = st.columns(widths, gap="small")
+    for i, lbl in enumerate(labels):
+        align = "left" if i == 1 else ("center" if i == 0 else "right")
+        hcols[i].markdown(
+            f"<div class='scr-rank-header' style='text-align:{align};'>{lbl}</div>",
+            unsafe_allow_html=True,
+        )
+    for row in members.itertuples(index=False):
+        r = row._asdict()
+        ticker = str(r["ticker"])
+        name = _first_valid_name(r.get("name_kr"), r.get("name_en"), ticker)
+        rn = r.get("return_n", 0) or 0
+        rs = r.get("rs")
+        rsw = r.get("rs_weighted")
+        dv = r.get("avg_traded_value_20d")
+        clr = "#ff4b4b" if rn >= 0 else "#1a9cff"
+
+        cols = st.columns(widths, gap="small")
+        cols[0].markdown(
+            f"<div style='text-align:center;color:#9ca3af;padding-top:6px;'>"
+            f"{int(r['rank_in_sector'])}</div>",
+            unsafe_allow_html=True,
+        )
+        cols[1].button(
+            name,
+            key=f"scr_sec_mem_{spec['code']}_{ticker}",
+            on_click=_make_pick_callback(spec, ticker),
+            use_container_width=True,
+        )
+        cols[2].markdown(
+            f"<div style='text-align:right;padding-top:6px;'>"
+            f"{format(rs * 100, '+.2f') if pd.notna(rs) else '—'}</div>",
+            unsafe_allow_html=True,
+        )
+        cols[3].markdown(
+            f"<div style='text-align:right;padding-top:6px;'>"
+            f"{_sector_num(rsw, 3) if pd.notna(rsw) else '—'}</div>",
+            unsafe_allow_html=True,
+        )
+        cols[4].markdown(
+            f"<div style='text-align:right;padding-top:6px;color:{clr};font-weight:500;'>"
+            f"{_sector_pct(rn, signed=True)}</div>",
+            unsafe_allow_html=True,
+        )
+        cols[5].markdown(
+            f"<div style='text-align:right;padding-top:6px;color:#6b7280;'>"
+            f"{_fmt_cell(dv / spec['dv_divisor'] if pd.notna(dv) else None, spec['dv_col_format'])}</div>",
+            unsafe_allow_html=True,
+        )
+
+        if ticker == selected:
+            with st.container(key=f"scr_sec_chart_{spec['code']}_{ticker}"):
+                _render_chart(
+                    spec, ticker, lookback_days=120, height=440,
+                    key_suffix="secinline", name=name,
+                )
+
+
+def _render_sector_view(
     spec: dict,
     index_code: str,
     rs_period: int,
     filter_config: dict,
     tickers: list[str],
 ) -> None:
-    with st.expander("섹터 분석 · 주도섹터와 섹터 내부 주도주", expanded=False):
-        if not tickers:
-            st.caption("구성 종목 캐시가 없어 섹터 분석을 계산할 수 없습니다.")
-            return
+    """섹터-우선 화면: 새로고침 때 미리 저장한 스냅샷을 읽어 표시(계산 없음).
 
-        enabled = st.checkbox(
-            "섹터 분석 계산",
-            value=False,
-            key=_key(spec, "sector_enabled"),
-            help="체크하면 현재 필터를 통과한 전체 종목으로 섹터 강도와 섹터 내부 주도주를 계산합니다.",
+    수익률 상위 12개 섹터만 노출(나머지는 저장만). 타일 클릭 → 저장된 종목 즉시 펼침.
+    """
+    scope = sector_snapshot_scope(index_code)
+    snapshot = ui_load_stored_sector_snapshot(scope)
+    summary = snapshot.get("sector_summary") if snapshot else None
+
+    if summary is None or summary.empty:
+        st.info(
+            "아직 미리 계산된 섹터 데이터가 없습니다. "
+            f"사이드바의 **[{spec['refresh_btn']}]** 으로 데이터를 새로고침하면 "
+            "섹터 결과가 저장되어 빠르게 뜹니다."
         )
-        if not enabled:
-            st.caption("체크하면 현재 지수/필터 기준의 주도섹터와 섹터 내부 주도주를 계산합니다.")
-            return
+        if st.button("지금 섹터 계산해서 저장", key=_key(spec, "sector_rebuild")):
+            market = "kr" if scope == "KR" else "us"
+            with st.spinner("섹터 강도 계산 중... (1회만, 이후엔 새로고침에서 자동 저장)"):
+                screen_rebuild_sector_snapshot(market)
+                ui_load_stored_sector_snapshot.clear()
+            st.rerun()
+        return
 
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            top_members = st.number_input(
-                "섹터 점수 상위 종목 수",
-                min_value=1,
-                max_value=10,
-                value=5,
-                step=1,
-                key=_key(spec, "sector_top_members"),
-                help="섹터 점수 = 섹터 내부 상위 N개 종목 수익률 평균",
-            )
-        with c2:
-            min_sector_size = st.number_input(
-                "최소 섹터 종목 수",
-                min_value=1,
-                max_value=20,
-                value=1,
-                step=1,
-                key=_key(spec, "sector_min_size"),
-            )
+    members = snapshot.get("sector_members", pd.DataFrame())
+    period = snapshot.get("period") or rs_period
+    updated = (snapshot.get("updated_at") or "")[:10]
 
-        with st.spinner("섹터 강도 계산 중..."):
-            snapshot = ui_load_sector_snapshot(
-                index_code=index_code,
-                rs_period=rs_period,
-                filter_config=filter_config,
-                tickers_tuple=tuple(tickers),
-                top_n_per_sector=int(top_members),
-                min_sector_size=int(min_sector_size),
-            )
+    show_all = bool(st.session_state.get(_key(spec, "sector_show_all"), False))
+    display = summary if show_all else summary.head(12)
 
-        summary = snapshot.get("sector_summary", pd.DataFrame())
-        members = snapshot.get("sector_members", pd.DataFrame())
-        stats = snapshot.get("filter_stats", {})
+    scope_label = "코스피+코스닥 합산" if scope == "KR" else _index_display_name(index_code)
+    st.caption(
+        f"{scope_label} · {period}일 수익률 기준 · 전체 {len(summary)}개 섹터 중 "
+        f"{'전체' if show_all else '상위 12'} 표시 · 저장 {updated} · "
+        f"타일을 누르면 종목이 펼쳐집니다"
+    )
 
-        st.caption(
-            f"필터 통과 {stats.get('final', 0):,}개 · "
-            f"RS 계산 {len(snapshot.get('ranked', pd.DataFrame())):,}개 · "
-            f"섹터 {len(summary):,}개"
-        )
+    st.markdown(_build_sector_metrics_html(summary), unsafe_allow_html=True)
 
-        if summary is None or summary.empty:
-            st.info("섹터 요약을 만들 수 있는 종목이 없습니다.")
-            return
+    # 멤버 필터 기준 = 코스피(KR) / 해당 지수(US) period일 수익률
+    bench_code = "KS11" if scope == "KR" else index_code
+    benchmark = _index_period_return(bench_code, int(period))
+    if benchmark is None:
+        benchmark = 0.0
 
-        st.dataframe(
-            _format_sector_summary(summary),
-            use_container_width=True,
-            hide_index=True,
-            height=min(420, 38 * min(len(summary), 12) + 38),
-        )
+    sel_key = _key(spec, "sel_sector")
+    selected = st.session_state.get(sel_key)
+    st.markdown(_build_sector_tiles_css(display, spec["code"], selected), unsafe_allow_html=True)
 
-        sector_options = summary["sector"].astype(str).tolist()
-        selected_sector = st.selectbox(
-            "섹터 내부 주도주 보기",
-            options=sector_options,
-            key=_key(spec, "selected_sector"),
-        )
-        selected_members = screen_select_sector_members(
-            members,
-            selected_sector,
-            top_n=int(max(top_members, 1) * 2),
-        )
-        member_view = _format_sector_members(spec, selected_members)
-        if member_view.empty:
-            st.caption("선택한 섹터의 종목이 없습니다.")
-        else:
-            st.dataframe(
-                member_view,
-                use_container_width=True,
-                hide_index=True,
-                height=min(420, 38 * len(member_view) + 38),
-            )
+    rows = list(display.itertuples(index=False))
+    for i in range(0, len(rows), 3):
+        chunk = rows[i:i + 3]
+        cols = st.columns(3, gap="small")
+        for col, row in zip(cols, chunk):
+            rank = int(row.rank)
+            leader = (str(row.top_name).strip() or str(row.top_ticker)).strip()
+            with col:
+                with st.container(key=f"sectile_{spec['code']}_{rank}"):
+                    st.button(
+                        f"{row.sector}\n\n{_sector_pct(row.sector_score, signed=True)}",
+                        key=f"sectilebtn_{spec['code']}_{rank}",
+                        on_click=_select_sector,
+                        args=(sel_key, str(row.sector)),
+                        use_container_width=True,
+                        help=f"주도주 {leader} · {int(row.stock_count)}종목 · "
+                             f"양수 {round(float(row.positive_ratio) * 100)}%",
+                    )
+        if selected is not None and str(selected) in [str(r.sector) for r in chunk]:
+            _render_sector_detail(spec, members, str(selected), period, summary, 10, benchmark)
 
 
 def _render_screening_section(spec: dict, settings: tuple) -> None:
@@ -1941,7 +2151,26 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
             )
         return
 
-    _render_sector_panel(spec, index_code, rs_period, filter_config, tickers)
+    vcol1, vcol2 = st.columns([2.2, 1.2])
+    with vcol1:
+        view_mode = st.radio(
+            "보기 방식",
+            ["섹터별 보기", "전체 RS 보기"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key=_key(spec, "view_mode"),
+        )
+    with vcol2:
+        if view_mode == "섹터별 보기":
+            st.toggle(
+                "전체 섹터 보기",
+                key=_key(spec, "sector_show_all"),
+                help="기본은 수익률 상위 12개 섹터만 표시(저장은 전체).",
+            )
+
+    if view_mode == "섹터별 보기":
+        _render_sector_view(spec, index_code, rs_period, filter_config, tickers)
+        return
 
     selected_ticker = _render_ranking_table(spec, ranked, rs_period, index_code)
     if selected_ticker is not None:
@@ -2391,7 +2620,7 @@ def render_screening_page() -> None:
     kr_settings = (kr_index_code, kr_rs_period, kr_top_n, kr_filter_config)
 
     # 카드 · 차트 · 랭킹을 단일 컬럼 블록으로 — 블록 간 Streamlit 자동 여백 제거
-    st.markdown("### 📊 오늘의 시장")
+    # (상단 "오늘의 시장" 헤딩 제거 → 지수 카드를 화면 최상단으로 끌어올림)
     main_cols = st.columns(2, gap="large")
     with main_cols[0]:
         _render_market_card(_US_SPEC, us_settings)

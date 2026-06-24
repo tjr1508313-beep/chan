@@ -39,7 +39,19 @@
   - `scripts/build_kr_sector_map_ls.py`가 LS증권 `t8424`/`t1516` 업종 API로 미분류 종목을 공식 업종명으로 보강
   - 현재 CSV는 name-rule 기반 초안이므로 틀린 섹터는 사용하면서 수동 보정
 - LS증권 TR 코드/사용 예시는 `docs/ls-openapi-programgarden-reference.md`의 Programgarden Finance 참고 자료도 함께 확인
-- Streamlit 화면에서는 각 미국/한국 RS Top 테이블 위의 `섹터 분석 · 주도섹터와 섹터 내부 주도주` expander를 열고 `섹터 분석 계산`을 체크해 확인
+- Streamlit 화면은 각 자산군마다 상단 토글로 **`섹터별 보기`(기본) ↔ `전체 RS 보기`** 전환
+  - 섹터별 보기 = 섹터-우선 주력 화면(스탁이지 "오늘의 업종" 스타일): 요약 지표카드 + **섹터 그리드(타일)**
+    - 타일 = 강도 색(빨강 강세/파랑 약세). **타일 자체가 클릭 버튼** → 그 줄 아래로 섹터 종목이 펼쳐짐(별도 버튼 없음, 한 번에 하나)
+    - **수익률(20일) 상위 12개 섹터만 표시**(보기방식 라디오 옆 `전체 섹터 보기` 토글로 전체 노출). 펼침 → 그 섹터 종목 중 **코스피 20일 수익률 −5%p 이상(종목 절대수익률 기준, KR은 KOSPI=KS11 벤치마크) + 상위 10개**만 → 종목 클릭 시 5MA·9ATR 차트
+      - ⚠️ 멤버 필터는 `rs`(각 시장 지수 대비)가 아니라 **절대수익률 vs 단일 코스피 벤치마크**로 한다. KQ11 지수가 망가지면 rs가 부풀려져 필터를 우회하기 때문(2026-06-24 코스닥 −23% 이상치 사례).
+  - 섹터 정렬 = `sector_score`(섹터 내부 상위 5종목 **20일 raw 수익률** 평균 → 지수 무관), 보조로 양수비율(breadth)
+  - **★ precompute & store (화면은 읽기만)**: 무거운 섹터 계산은 **새로고침 때 1회** 수행해 `sector_snapshot` 테이블에 저장(요약+멤버 전체). 화면은 `cache_load_sector_snapshot`로 **읽기만**(~0.01s). 계산 기준 고정(RS 20일, 거래대금 느슨 필터). 미저장 시 안내 + "지금 계산" 폴백 버튼.
+    - 저장: `cache_save_sector_snapshot`/`cache_load_sector_snapshot`(`cache.py`). 굽기: `sector.screen_rebuild_sector_snapshot(market)` → 새로고침 경로 `refresh_cache.py`(`_refresh_us`/`_refresh_kr`) + 로컬 `_refresh_worker`에서 호출
+    - scope: KR(코스피+코스닥 합산) / US_^IXIC / US_^GSPC
+  - **섹터용 느슨 필터**(저장 시 고정): KR 거래대금 100억↑·시총 3,000억↑ / US 거래대금 $10M↑·시총 $300M↑, 위험종목·우선주/ETF/스팩 제외 유지. 전체 RS 보기의 강한 필터와 별개.
+    - **초저시총 급등주 왜곡 컷**: `exclude_caution=True`로 투자경고·투자주의·투자주의환기·단기과열 배지(`caution_flags` 비어있지 않음) 종목도 섹터 계산에서 제외. is_risk(관리/매매정지/정리매매)와 별개의 옵션 필터(`core.screen_apply_filters`, 기본 False). 시총 하한 부활과 함께 비금속 +136.95%(서산 등 초저시총 급등) 왜곡을 차단. ⚠️ 값 변경 후에는 **새로고침으로 sector_snapshot 재계산**해야 반영됨.
+  - **한국은 코스피+코스닥 합산**: KS11+KQ11을 합쳐 섹터 재집계(예: 반도체 코스피4+코스닥17=21종목). 각 종목 RS는 자기 시장 지수 대비로 정확(`screen_build_combined_sector_snapshot`). 미국은 단일 지수.
+  - 구현: `screening/sector.py`(`_build_index_ranked`/`screen_build_combined_sector_snapshot`/`screen_rebuild_sector_snapshot`/`sector_snapshot_scope`), `screening/ui.py`(`_render_sector_view`/`_render_sector_detail`/`_render_sector_member_rows`/`_build_sector_tiles_css`/`_select_sector`/`ui_load_stored_sector_snapshot`), 색조 `_sector_tint`, CSS `theme.py` `_SECTOR_CSS`
 - UI 밖에서도 `screening.sector.screen_build_sector_snapshot()` 또는
   `py scripts/show_sector_rs.py --index-code KS11 --period 20` 로 섹터 요약과 섹터 내부 주도주를 확인 가능
   - 특정 섹터만 볼 때는 `--sector 반도체` 옵션 사용
@@ -51,7 +63,7 @@
 - **Phase 1** (미국주식 MVP) ✅ 완료
 - **Phase 2** (한국주식 확장) ✅ 완료
 - **Phase 3** (매매일지 통합) — 사용자 담당
-- **섹터 RS 확장** — 백엔드/CLI/Streamlit 1차 연결 완료. 섹터별 강도와 섹터 내부 주도주를 함께 산출.
+- **섹터 RS 확장** — 섹터-우선 화면이 메인으로 승격됨(섹터별 보기 기본 + 전체 RS 보기 토글). 백엔드/CLI도 유지.
 
 ### 자동 갱신
 GitHub Actions가 평일 캐시 DB를 자동 갱신 후 `data-cache` 브랜치에 push. 갱신 범위 = 지수 + 시세 + 메타(TTL 7일 증분) + 첫 화면 지수 차트 스냅샷.

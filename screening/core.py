@@ -449,6 +449,14 @@ def screen_apply_filters(
         current = current[~risk_flag]
     stats["after_risk"] = int(len(current))
 
+    # 4.5) 투자경고/투자주의/투자주의환기/단기과열 등 배지 종목 제외 (옵션)
+    #   is_risk 와 별개로 caution_flags 가 비어있지 않으면 제외. 섹터 점수가
+    #   초저시총 급등주(흔히 단기과열·투자경고 지정)로 왜곡되는 것을 막는다.
+    if cfg.get("exclude_caution", False) and "caution_flags" in current.columns:
+        caution = current["caution_flags"].fillna("").astype(str).str.strip()
+        current = current[caution == ""]
+    stats["after_caution"] = int(len(current))
+
     # 5) 중국기업
     if cfg.get("exclude_china", True):
         china_flag = current["is_china"].fillna(False).astype(bool)
