@@ -91,6 +91,9 @@ jobs:
 
       - name: Run refresh
         id: refresh
+        env:
+          LS_APP_KEY: ${{ secrets.LS_APP_KEY }}
+          LS_APP_SECRET: ${{ secrets.LS_APP_SECRET }}
         run: |
           mkdir -p .ci-out
           python -m scripts.refresh_cache --market kr --json-out .ci-out/result.json
