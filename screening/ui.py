@@ -700,111 +700,110 @@ def _render_index_status_badge(index_code: str) -> None:
     )
 
 
-def _render_sidebar(spec: dict) -> dict:
-    """자산군 사이드바 → filter_config. 지수/기간/표시 개수는 메인 화면 인라인 컨트롤로 이동."""
-    with st.sidebar:
-        st.markdown(f"##### {spec['label']} 설정")
+def _build_filter_config(spec: dict) -> dict:
+    """필터 위젯을 본문 expander 안에 렌더하고 filter_config dict 반환.
 
-        # 지수 코드는 인라인 위젯에서 관리 — 배지/새로고침 표시용으로만 읽음
-        index_options = spec["indices"]
-        sel = st.session_state.get(_key(spec, "selected_index"), list(index_options.keys())[0])
-        if sel not in index_options:
-            sel = list(index_options.keys())[0]
-        index_code = index_options[sel]
-
-        _render_index_status_badge(index_code)
-
-        _render_refresh_section(spec, index_code)
-
-        # ★ Step 2: 즐겨찾기 토글
-        st.divider()
-        _render_fav_toggle_sidebar(spec)
-
-        st.divider()
-        with st.expander("필터 설정", expanded=False):
-            min_price = st.number_input(
-                spec["min_price_label"],
-                min_value=type(spec["min_price_default"])(0),
-                max_value=spec["min_price_max"],
-                value=spec["min_price_default"],
-                step=spec["min_price_step"],
-                key=_key(spec, "filter_min_price"),
+    사이드바 없이 본문 컨텍스트에서 직접 호출한다.
+    """
+    with st.expander("필터 설정", expanded=False):
+        min_price = st.number_input(
+            spec["min_price_label"],
+            min_value=type(spec["min_price_default"])(0),
+            max_value=spec["min_price_max"],
+            value=spec["min_price_default"],
+            step=spec["min_price_step"],
+            key=_key(spec, "filter_min_price"),
+        )
+        min_dv = st.number_input(
+            spec["min_dv_label"],
+            min_value=type(spec["min_dv_default"])(0),
+            max_value=spec["min_dv_max"],
+            value=spec["min_dv_default"],
+            step=spec["min_dv_step"],
+            key=_key(spec, "filter_min_dv"),
+            help=spec["min_dv_help"],
+        )
+        min_mc_raw = 0.0
+        if spec["show_market_cap_filter"]:
+            min_mc_input = st.number_input(
+                spec["min_marketcap_label"],
+                min_value=0,
+                max_value=spec["min_marketcap_max"],
+                value=spec["min_marketcap_default"],
+                step=spec["min_marketcap_step"],
+                key=_key(spec, "filter_min_marketcap"),
+                help=spec["min_marketcap_help"],
             )
-            min_dv = st.number_input(
-                spec["min_dv_label"],
-                min_value=type(spec["min_dv_default"])(0),
-                max_value=spec["min_dv_max"],
-                value=spec["min_dv_default"],
-                step=spec["min_dv_step"],
-                key=_key(spec, "filter_min_dv"),
-                help=spec["min_dv_help"],
+            min_mc_raw = spec["min_marketcap_to_raw"](min_mc_input)
+        max_range_pct = st.slider(
+            "최근 20일 최대 일일 변동폭 한도 (%)",
+            min_value=10, max_value=100, value=50, step=5,
+            key=_key(spec, "filter_max_range_pct"),
+            help="이 값 이상 변동한 날이 있는 종목은 제외.",
+        )
+        exclude_atr_drop = st.checkbox(
+            "최근 1~2일 급락 종목 제외",
+            value=True,
+            key=_key(spec, "filter_exclude_atr_drop"),
+            help=(
+                "당일(D-0) 또는 전일(D-1) 종가 하락폭이 "
+                "9일 ATR × 임계값 이상이면 제외. "
+                "ATR 은 lookahead 방지를 위해 직전일까지의 값 사용."
+            ),
+        )
+        atr_drop_mult = st.slider(
+            "급락 한도 (9일 ATR × 배수)",
+            min_value=1.0, max_value=5.0, value=2.5, step=0.1,
+            key=_key(spec, "filter_atr_drop_mult"),
+            disabled=not exclude_atr_drop,
+            help="값이 작을수록 더 많이 거름. 기본 2.5배.",
+        )
+        exclude_china = False
+        if spec["show_china_filter"]:
+            exclude_china = st.checkbox(
+                "중국기업 제외", value=True,
+                key=_key(spec, "filter_exclude_china"),
             )
-            min_mc_raw = 0.0
-            if spec["show_market_cap_filter"]:
-                min_mc_input = st.number_input(
-                    spec["min_marketcap_label"],
-                    min_value=0,
-                    max_value=spec["min_marketcap_max"],
-                    value=spec["min_marketcap_default"],
-                    step=spec["min_marketcap_step"],
-                    key=_key(spec, "filter_min_marketcap"),
-                    help=spec["min_marketcap_help"],
-                )
-                min_mc_raw = spec["min_marketcap_to_raw"](min_mc_input)
-            max_range_pct = st.slider(
-                "최근 20일 최대 일일 변동폭 한도 (%)",
-                min_value=10, max_value=100, value=50, step=5,
-                key=_key(spec, "filter_max_range_pct"),
-                help="이 값 이상 변동한 날이 있는 종목은 제외.",
-            )
-            exclude_atr_drop = st.checkbox(
-                "최근 1~2일 급락 종목 제외",
-                value=True,
-                key=_key(spec, "filter_exclude_atr_drop"),
+        if spec.get("show_risk_filter", True):
+            exclude_risk = st.checkbox(
+                "관리/위험종목 제외", value=True,
+                key=_key(spec, "filter_exclude_risk"),
                 help=(
-                    "당일(D-0) 또는 전일(D-1) 종가 하락폭이 "
-                    "9일 ATR × 임계값 이상이면 제외. "
-                    "ATR 은 lookahead 방지를 위해 직전일까지의 값 사용."
+                    "KRX 공시 기반 관리종목/투자주의/거래정지 제외. "
+                    "위험종목 데이터를 새로고침에서 갱신해야 효과가 적용됩니다."
                 ),
             )
-            atr_drop_mult = st.slider(
-                "급락 한도 (9일 ATR × 배수)",
-                min_value=1.0, max_value=5.0, value=2.5, step=0.1,
-                key=_key(spec, "filter_atr_drop_mult"),
-                disabled=not exclude_atr_drop,
-                help="값이 작을수록 더 많이 거름. 기본 2.5배.",
-            )
-            exclude_china = False
-            if spec["show_china_filter"]:
-                exclude_china = st.checkbox(
-                    "중국기업 제외", value=True,
-                    key=_key(spec, "filter_exclude_china"),
-                )
-            if spec.get("show_risk_filter", True):
-                exclude_risk = st.checkbox(
-                    "관리/위험종목 제외", value=True,
-                    key=_key(spec, "filter_exclude_risk"),
-                    help=(
-                        "KRX 공시 기반 관리종목/투자주의/거래정지 제외. "
-                        "위험종목 데이터를 사이드바 새로고침에서 갱신해야 효과가 적용됩니다."
-                    ),
-                )
-            else:
-                exclude_risk = False
-            if spec["extra_caption"]:
-                st.caption(spec["extra_caption"])
+        else:
+            exclude_risk = False
+        if spec["extra_caption"]:
+            st.caption(spec["extra_caption"])
 
-        filter_config = {
-            "min_price": float(min_price),
-            "min_traded_value": spec["min_dv_to_raw"](min_dv),
-            "min_market_cap": float(min_mc_raw),
-            "max_daily_range_pct": float(max_range_pct) / 100.0,
-            "max_atr_drop_multiple": float(atr_drop_mult) if exclude_atr_drop else 0.0,
-            "exclude_china": bool(exclude_china),
-            "exclude_risk": bool(exclude_risk),
-        }
+    return {
+        "min_price": float(min_price),
+        "min_traded_value": spec["min_dv_to_raw"](min_dv),
+        "min_market_cap": float(min_mc_raw),
+        "max_daily_range_pct": float(max_range_pct) / 100.0,
+        "max_atr_drop_multiple": float(atr_drop_mult) if exclude_atr_drop else 0.0,
+        "exclude_china": bool(exclude_china),
+        "exclude_risk": bool(exclude_risk),
+    }
 
-    return filter_config
+
+def _render_filter_controls(spec: dict) -> None:
+    """지수 상태 배지 + 데이터 새로고침 + 즐겨찾기 토글을 본문에 렌더.
+
+    사이드바 없이 본문 컨텍스트에서 직접 호출한다.
+    """
+    # 현재 선택된 지수 코드 읽기 (위젯은 _render_rs_header 에서 렌더됨)
+    index_options = spec["indices"]
+    sel = st.session_state.get(_key(spec, "selected_index"), list(index_options.keys())[0])
+    if sel not in index_options:
+        sel = list(index_options.keys())[0]
+    index_code = index_options[sel]
+
+    _render_index_status_badge(index_code)
+    _render_refresh_section(spec, index_code)
+    _render_fav_toggle_sidebar(spec)
 
 
 def _get_inline_settings(spec: dict) -> tuple[str, int, int]:
@@ -1692,7 +1691,7 @@ def _render_chart(
     atr_last_vals = atr9.dropna()
     atr9_val = float(atr_last_vals.iloc[-1]) if len(atr_last_vals) > 0 else 0.0
     already_in = any(item["ticker"] == ticker for item in _ensure_basket())
-    basket_label = "✓ 바구니에 있음" if already_in else "＋ 바구니에 담기"
+    basket_label = "✓ 담김" if already_in else "＋담기"
     if st.button(basket_label, key=f"scr_basket_add_{spec['code']}_{ticker}_{key_suffix}",
                  disabled=already_in,
                  help="배팅 계산기에서 포지션 사이즈를 계산합니다."):
@@ -2112,18 +2111,19 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
     index_display = _index_display_name(index_code)
 
     _render_rs_header(spec, index_code, index_display, rs_period, top_n)
+    _render_filter_controls(spec)
 
     if stats.get("total", 0) == 0 or not tickers:
         st.warning(
             f"**{index_display}** 구성종목 데이터가 캐시에 없습니다. "
-            f"사이드바의 **[{spec['refresh_btn']}]** 버튼을 눌러 "
+            f"위의 **[{spec['refresh_btn']}]** 버튼을 눌러 "
             "데이터를 먼저 받아주세요."
         )
         return
     if stats.get("final", 0) == 0:
         st.warning(
             "필터 조건에 맞는 종목이 없습니다. "
-            "사이드바의 **필터 설정** 을 완화해보세요."
+            "위의 **필터 설정** 을 완화해보세요."
         )
         return
     if ranked.empty:
@@ -2134,7 +2134,7 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
                 f"필터 통과한 {lag_excluded}개 종목 모두의 시세 캐시가 "
                 f"**{index_display}** 지수보다 옛날 날짜에 머물러 있어, "
                 f"RS 시간 정합성 검사에서 전부 제외됐습니다. "
-                f"사이드바의 **[{spec['refresh_btn']}]** 을 눌러 "
+                f"위의 **[{spec['refresh_btn']}]** 을 눌러 "
                 f"시세 캐시를 최신화해주세요."
             )
             return
@@ -2142,7 +2142,7 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
         if idx_cache is None or idx_cache.empty or len(idx_cache) < rs_period + 1:
             st.warning(
                 f"**{index_display}** 지수 시세가 캐시에 없거나 부족합니다. "
-                f"사이드바에서 이 지수를 선택한 상태로 "
+                f"위의 지수 선택 후 "
                 f"**[{spec['refresh_btn']}]** 를 눌러 지수 데이터를 받아주세요."
             )
         else:
@@ -2237,163 +2237,6 @@ def _basket_add(ticker: str, name: str, spec_code: str, price: float, atr9: floa
 def _basket_remove(ticker: str) -> None:
     st.session_state[_BASKET_KEY] = [i for i in _ensure_basket() if i["ticker"] != ticker]
     _save_prefs()
-
-
-def _render_betting_calculator_and_basket_sidebar() -> None:
-    """사이드바 최상단 — 배팅 계산기 + 종목 바구니."""
-    st.markdown("##### 배팅 계산기")
-    col_a, col_b, col_c = st.columns([3, 1, 1])
-    with col_a:
-        st.number_input(
-            "자산 (만원)",
-            min_value=0,
-            value=int(st.session_state.get("scr_portfolio_value", 0)),
-            step=1,
-            format="%d",
-            key="scr_portfolio_value",
-            on_change=_save_prefs,
-            help="보유 자산 총액 (만원 단위 — 1500 입력 시 1,500만원)",
-        )
-    with col_b:
-        st.number_input(
-            "리스크 %",
-            min_value=0.1,
-            max_value=10.0,
-            value=float(st.session_state.get("scr_risk_pct", 1.0)),
-            step=0.1,
-            format="%.1f",
-            key="scr_risk_pct",
-            on_change=_save_prefs,
-        )
-    with col_c:
-        st.number_input(
-            "손절 N배",
-            min_value=0.5,
-            max_value=5.0,
-            value=float(st.session_state.get("scr_stop_n_mult", 2.0)),
-            step=0.5,
-            format="%.1f",
-            key="scr_stop_n_mult",
-            on_change=_save_prefs,
-            help="ATR 몇 배 하락 시 손절할지 (기본 2N). 수량 = 종목당 리스크 ÷ (ATR × N배)",
-        )
-
-    portfolio_man: int = int(st.session_state.get("scr_portfolio_value", 0))
-    portfolio: int = portfolio_man * 10_000  # 만원 → 원 환산
-    risk_pct: float = float(st.session_state.get("scr_risk_pct", 1.0))
-    total_risk = int(portfolio * risk_pct / 100)
-    stop_n_mult: float = float(st.session_state.get("scr_stop_n_mult", 2.0))
-
-    # USD/KRW 환율 (미국 종목 포지션 계산용)
-    with st.expander("환율 설정", expanded=False):
-        st.number_input(
-            "USD/KRW 환율",
-            min_value=500.0,
-            max_value=3_000.0,
-            value=float(st.session_state.get("scr_fx_rate", 1_380.0)),
-            step=10.0,
-            format="%.0f",
-            key="scr_fx_rate",
-            on_change=_save_prefs,
-            help="미국 종목 포지션 계산에 사용",
-        )
-    fx_rate: float = float(st.session_state.get("scr_fx_rate", 1_380.0))
-
-    risk_color = COLOR_PROFIT if total_risk > 0 else COLOR_MUTED
-    st.markdown(
-        f"<div style='margin:-4px 0 4px; font-size:0.85rem; color:{COLOR_MUTED};'>"
-        f"총 리스크: <span style='color:{risk_color}; font-weight:600;'>₩{total_risk:,}</span>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-    basket = _ensure_basket()
-    n_basket = len(basket)
-    per_risk = (total_risk // n_basket) if n_basket > 0 else 0
-
-    st.markdown(
-        f"<div style='font-size:0.82rem; color:{COLOR_MUTED}; margin-bottom:4px;'>"
-        f"종목 바구니 {n_basket}개"
-        + (
-            f" · 종목당 리스크 <span style='font-weight:600; color:{COLOR_TEXT};'>₩{per_risk:,}</span>"
-            if n_basket > 0 else ""
-        )
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
-    to_remove: list[str] = []
-    for item in basket:
-        ticker = item["ticker"]
-        name = item["name"]
-        spec_code = item["spec_code"]
-        price = item["price"]
-        atr9_val = item["atr9"]
-
-        # 포지션 계산: per_risk(KRW) / stop_distance(KRW)
-        if atr9_val and atr9_val > 0 and per_risk > 0:
-            if spec_code == "kr":
-                stop_dist = atr9_val * stop_n_mult
-                shares = math.floor(per_risk / stop_dist)
-                total_val = shares * price
-                stop_price = price - stop_dist
-                size_str = f"{shares:,}주 (₩{total_val:,.0f})"
-                stop_str = f"손절가 ₩{stop_price:,.0f} ({stop_n_mult:.1g}N)"
-            else:
-                # US: ATR은 USD 단위 → KRW 환산
-                atr9_krw = atr9_val * fx_rate
-                stop_dist_krw = atr9_krw * stop_n_mult
-                shares = math.floor(per_risk / stop_dist_krw) if stop_dist_krw > 0 else 0
-                total_val_usd = shares * price
-                stop_price_usd = price - atr9_val * stop_n_mult
-                size_str = f"{shares:,}주 (${total_val_usd:,.0f})"
-                stop_str = f"손절가 ${stop_price_usd:,.2f} ({stop_n_mult:.1g}N)"
-        else:
-            size_str = "—"
-            stop_str = ""
-
-        if spec_code == "kr":
-            price_str = f"₩{price:,.0f}"
-            atr_str = f"₩{atr9_val:,.0f}"
-        else:
-            price_str = f"${price:,.2f}"
-            atr_str = f"${atr9_val:,.2f}"
-
-        col1, col2 = st.columns([3.5, 0.5])
-        with col1:
-            stop_line = (
-                f"<br><span style='color:{COLOR_MUTED}; font-size:0.78rem;'>{stop_str}</span>"
-                if stop_str else ""
-            )
-            st.markdown(
-                f"<div style='font-size:0.80rem; color:{COLOR_TEXT}; line-height:1.6;"
-                f"padding:4px 0;'>"
-                f"<b>{ticker}</b> {name}<br>"
-                f"<span style='color:{COLOR_MUTED};'>"
-                f"{price_str} · ATR {atr_str}</span><br>"
-                f"<span style='color:{COLOR_PROFIT}; font-weight:600;'>→ {size_str}</span>"
-                f"{stop_line}"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        with col2:
-            if st.button("×", key=f"scr_basket_rm_{ticker}", help=f"{ticker} 제거"):
-                to_remove.append(ticker)
-
-    for t in to_remove:
-        _basket_remove(t)
-    if to_remove:
-        st.rerun()
-
-    if n_basket > 0:
-        if st.button("바구니 비우기", key="scr_basket_clear", use_container_width=True):
-            st.session_state[_BASKET_KEY] = []
-            _save_prefs()
-            st.rerun()
-    else:
-        st.caption("차트에서 '바구니에 담기' 버튼으로 추가하세요.")
-
-    st.divider()
 
 
 # ─── 스윙 하락 구간 분석 표시 ────────────────────────────────────────
@@ -2601,7 +2444,7 @@ def render_screening_page() -> None:
     """활성 탭(한국주식 / 미국주식)만 렌더하는 탭 라우터.
 
     탭 버튼은 화면 상단에 표시되고, 활성 시장만 렌더된다.
-    사이드바 필터는 Task 5에서 본문 컨트롤로 이전 예정.
+    필터·컨트롤은 본문 탭 내부에 렌더된다(사이드바 없음).
     """
     _load_prefs()
     st.session_state.setdefault("scr_active_tab", "kr")
@@ -2610,15 +2453,22 @@ def render_screening_page() -> None:
     active = _render_tab_bar()
     spec = _KR_SPEC if active == "kr" else _US_SPEC
 
-    filter_config = _render_sidebar(spec)  # 임시: Task 5에서 본문 컨트롤로 이전
+    _render_market_tab(spec)
+
+
+def _render_market_tab(spec: dict) -> None:
+    """ㄴ자 레이아웃: 좌상=지수카드/차트, 우상=베팅설정, 전폭 밴드, 스크리닝 섹션.
+
+    컨트롤(지수/기간/표시/필터/새로고침/즐겨찾기)은 스크리닝 섹션 상단 본문에 렌더됨.
+    """
+    # 원격 동기화 배지 — 탭 상단에 한 번 표시
+    _render_remote_sync_badge()
+
+    # 필터 config 빌드 (본문 expander 안에 위젯 렌더)
+    filter_config = _build_filter_config(spec)
     index_code, rs_period, top_n = _get_inline_settings(spec)
     settings = (index_code, rs_period, top_n, filter_config)
 
-    _render_market_tab(spec, settings)
-
-
-def _render_market_tab(spec: dict, settings: tuple) -> None:
-    """ㄴ자 레이아웃: 좌상=지수카드/차트, 우상=베팅설정, 전폭 밴드, 스크리닝 섹션."""
     top_l, top_r = st.columns([1.5, 1], gap="medium")
     with top_l:
         _render_market_card(spec, settings)
