@@ -370,6 +370,77 @@ _SECTOR_CSS = """
 """
 
 
+_BETTING_CSS = """
+<style>
+/* ── 탭 버튼 (한국주식 / 미국주식) ───────────────────────────── */
+div[class*="st-key-scr_tab_btn_"] > .stButton > button {
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 0.95rem;
+    padding: 8px 18px;
+    transition: all 0.12s ease;
+}
+/* inactive (secondary) — 배경 흰색, 텍스트 회색, 테두리 연하게 */
+div[class*="st-key-scr_tab_btn_"] > .stButton > button[kind="secondary"] {
+    background: #ffffff !important;
+    color: #6b7280 !important;
+    border: 1px solid #e5e7eb !important;
+    box-shadow: none !important;
+}
+div[class*="st-key-scr_tab_btn_"] > .stButton > button[kind="secondary"]:hover {
+    color: #1a1a1a !important;
+    border-color: #d1d5db !important;
+    background: #f9fafb !important;
+}
+/* active (primary) — primaryColor(#ff4b4b) 빨강, 하단 강조선 */
+div[class*="st-key-scr_tab_btn_"] > .stButton > button[kind="primaryFormSubmit"],
+div[class*="st-key-scr_tab_btn_"] > .stButton > button[kind="primary"] {
+    border-bottom: 3px solid #ff4b4b !important;
+    border-radius: 8px 8px 4px 4px !important;
+    box-shadow: 0 2px 8px rgba(255,75,75,0.15) !important;
+}
+
+/* ── 베팅 밴드 ─ × 제거 버튼 ─────────────────────────────────── */
+div[class*="st-key-scr_bet_rm_"] > .stButton > button {
+    background: #fff0f0 !important;
+    color: #ff4b4b !important;
+    border: 1px solid #fecaca !important;
+    border-radius: 6px !important;
+    font-size: 0.85rem !important;
+    font-weight: 700 !important;
+    padding: 3px 10px !important;
+    min-height: 28px !important;
+    box-shadow: none !important;
+    line-height: 1;
+}
+div[class*="st-key-scr_bet_rm_"] > .stButton > button:hover {
+    background: #fee2e2 !important;
+    border-color: #f87171 !important;
+}
+
+/* ── 베팅 밴드 ─ 종목 카드 컬럼 경계 ───────────────────────────── */
+/* 밴드 종목 영역: 섹션 라벨 아래 컨텐츠를 약한 카드처럼 묶음 */
+.scr-bet-band-card {
+    background: #ffffff;
+    border: 0.5px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-height: 72px;
+}
+
+/* ── 베팅 합계 칸 강조 ────────────────────────────────────────── */
+.scr-bet-total-card {
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-left: 3px solid #ff4b4b;
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-height: 72px;
+}
+</style>
+"""
+
+
 def apply_theme() -> None:
     """스크리닝 앱 Toss-style 라이트 테마 CSS 주입.
 
@@ -377,4 +448,5 @@ def apply_theme() -> None:
     """
     st.markdown(_CSS, unsafe_allow_html=True)
     st.markdown(_SECTOR_CSS, unsafe_allow_html=True)
+    st.markdown(_BETTING_CSS, unsafe_allow_html=True)
     components.html(_NOTRANSLATE_JS, height=0)
