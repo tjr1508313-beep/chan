@@ -2597,38 +2597,38 @@ def _render_remote_sync_badge() -> None:
 
 
 def render_screening_page() -> None:
-    """미국주식 + 한국주식 순위를 좌우에 나란히 표시.
+    """활성 탭(한국주식 / 미국주식)만 렌더하는 탭 라우터.
 
-    상단에 시장 요약 카드 2개 (US + KR) 가 함께 표시된다.
-    선택한 종목의 차트는 각 시장의 해당 순위 행 바로 아래에 펼쳐진다.
+    탭 버튼은 화면 상단에 표시되고, 활성 시장만 렌더된다.
+    사이드바 필터는 Task 5에서 본문 컨트롤로 이전 예정.
     """
     _load_prefs()
-    with st.sidebar:
-        st.markdown("#### 주식 스크리닝")
-        st.caption("상대강도(RS) 기반 종목 발굴")
-        _render_remote_sync_badge()
-        st.divider()
-        _render_betting_calculator_and_basket_sidebar()
-    us_filter_config = _render_sidebar(_US_SPEC)
-    with st.sidebar:
-        st.divider()
-    kr_filter_config = _render_sidebar(_KR_SPEC)
+    st.session_state.setdefault("scr_active_tab", "kr")
 
-    us_index_code, us_rs_period, us_top_n = _get_inline_settings(_US_SPEC)
-    us_settings = (us_index_code, us_rs_period, us_top_n, us_filter_config)
-    kr_index_code, kr_rs_period, kr_top_n = _get_inline_settings(_KR_SPEC)
-    kr_settings = (kr_index_code, kr_rs_period, kr_top_n, kr_filter_config)
+    active = _render_tab_bar()
+    spec = _KR_SPEC if active == "kr" else _US_SPEC
 
-    # 카드 · 차트 · 랭킹을 단일 컬럼 블록으로 — 블록 간 Streamlit 자동 여백 제거
-    # (상단 "오늘의 시장" 헤딩 제거 → 지수 카드를 화면 최상단으로 끌어올림)
-    main_cols = st.columns(2, gap="large")
-    with main_cols[0]:
-        _render_market_card(_US_SPEC, us_settings)
-        _render_market_index_chart(_US_SPEC, us_settings[0])
-        st.markdown("## 미국주식")
-        _render_screening_section(_US_SPEC, us_settings)
-    with main_cols[1]:
-        _render_market_card(_KR_SPEC, kr_settings)
-        _render_market_index_chart(_KR_SPEC, kr_settings[0])
-        st.markdown("## 한국주식")
-        _render_screening_section(_KR_SPEC, kr_settings)
+    filter_config = _render_sidebar(spec)  # 임시: Task 5에서 본문 컨트롤로 이전
+    index_code, rs_period, top_n = _get_inline_settings(spec)
+    settings = (index_code, rs_period, top_n, filter_config)
+
+    _render_market_card(spec, settings)
+    _render_market_index_chart(spec, settings[0])
+    _render_screening_section(spec, settings)
+
+
+def _render_tab_bar() -> str:
+    """상단 탭 버튼 바를 그리고 활성 탭 코드("kr" | "us")를 반환."""
+    tabs = [("kr", "한국주식"), ("us", "미국주식")]
+    cols = st.columns(len(tabs) + 4)
+    for i, (code, label) in enumerate(tabs):
+        with cols[i]:
+            is_on = st.session_state.get("scr_active_tab") == code
+            if st.button(
+                label, key=f"scr_tab_btn_{code}",
+                type="primary" if is_on else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state["scr_active_tab"] = code
+                st.rerun()
+    return st.session_state.get("scr_active_tab", "kr")

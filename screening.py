@@ -64,7 +64,7 @@ def main() -> None:
         page_title="주식 스크리닝",
         page_icon=":chart_with_upwards_trend:",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
     apply_theme()
 
