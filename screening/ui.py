@@ -2185,7 +2185,7 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
 
 _BASKET_KEY = "scr_basket"
 _PREFS_FILE = Path(__file__).parent.parent / ".user_prefs.json"
-_PREFS_KEYS = ("scr_portfolio_value", "scr_risk_pct", "scr_fx_rate", "scr_stop_n_mult")
+_PREFS_KEYS = ("scr_portfolio_value", "scr_risk_pct", "scr_fx_rate", "scr_stop_n_mult", "scr_bet_split")
 _PREFS_INITIALIZED = "scr_prefs_initialized"
 
 
@@ -2659,7 +2659,7 @@ def _render_betting_panel(spec: dict, *, position: str) -> None:
             st.number_input("리스크 %", min_value=0.1, max_value=10.0, step=0.1,
                             format="%.1f", key="scr_risk_pct", on_change=_save_prefs)
             st.number_input("분할 수", min_value=1, max_value=5, step=1, format="%d",
-                            key="scr_bet_split")
+                            key="scr_bet_split", on_change=_save_prefs)
         st.caption(f"총 리스크 예산 ₩{result['total_risk']:,} · 종목당 ₩{result['per_risk']:,}")
         return
 
