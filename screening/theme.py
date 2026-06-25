@@ -63,7 +63,7 @@ html, body, .stApp {{
 
 /* ───── 배경/텍스트 ───── */
 .stApp {{ background-color: {COLOR_BG}; color: {COLOR_TEXT}; }}
-.main .block-container {{ padding-top: 0.5rem; padding-bottom: 3rem; max-width: 1480px; }}
+.main .block-container {{ padding-top: 0rem; padding-bottom: 3rem; max-width: 1480px; }}
 h1, h2, h3, h4, h5, h6 {{ color: {COLOR_TEXT} !important; letter-spacing: -0.02em; font-weight: 800; }}
 p, span, label, div {{ color: {COLOR_TEXT}; }}
 .stCaption, [data-testid="stCaptionContainer"] {{ color: {COLOR_MUTED} !important; }}
@@ -319,6 +319,8 @@ _NOTRANSLATE_JS = """
 (function() {
     try {
         var p = window.parent.document;
+        // 페이지 언어를 한국어로 명시 → 크롬이 '외국어'로 오인해 자동번역(한글→오역)하는 것 차단
+        p.documentElement.setAttribute('lang', 'ko');
         p.documentElement.setAttribute('translate', 'no');
         p.documentElement.classList.add('notranslate');
         if (!p.querySelector('meta[name="google"][content="notranslate"]')) {
@@ -326,6 +328,12 @@ _NOTRANSLATE_JS = """
             m.name = 'google';
             m.content = 'notranslate';
             (p.head || p.documentElement).appendChild(m);
+        }
+        if (!p.querySelector('meta[http-equiv="Content-Language"]')) {
+            var c = p.createElement('meta');
+            c.setAttribute('http-equiv', 'Content-Language');
+            c.content = 'ko';
+            (p.head || p.documentElement).appendChild(c);
         }
     } catch (e) { /* 무시 */ }
 })();
@@ -400,42 +408,92 @@ div[class*="st-key-scr_tab_btn_"] > .stButton > button[kind="primary"] {
     box-shadow: 0 2px 8px rgba(255,75,75,0.15) !important;
 }
 
-/* ── 베팅 밴드 ─ × 제거 버튼 ─────────────────────────────────── */
-div[class*="st-key-scr_bet_rm_"] > .stButton > button {
+/* ── 베팅 밴드 ─ × 제거 버튼 (카드 우측 상단에 겹쳐 배치) ──────── */
+/* 버튼은 카드보다 먼저 렌더되며, 컨테이너 height:0 으로 카드를 위로 끌어올린 뒤
+   버튼만 우측 상단 모서리에 떠 있게 한다. */
+/* 카드 컬럼을 × 버튼의 위치 기준점으로 (해당 버튼을 품은 컬럼만) */
+div[data-testid="stColumn"]:has(div[class*="st-key-scr_bet_rm_"]),
+div[data-testid="column"]:has(div[class*="st-key-scr_bet_rm_"]) {
+    position: relative;
+}
+div[class*="st-key-scr_bet_rm_"] {
+    position: absolute !important;
+    top: 4px;
+    right: 6px;
+    width: auto !important;
+    height: auto !important;
+    margin: 0 !important;
+    z-index: 8;
+}
+/* help= 툴팁 때문에 .stButton > div > span.stTooltipIcon > span > button 으로 깊게
+   감싸지므로, 자손 셀렉터로 button 을 직접 잡는다. 16px 정사각형. */
+div[class*="st-key-scr_bet_rm_"] .stButton,
+div[class*="st-key-scr_bet_rm_"] .stTooltipIcon,
+div[class*="st-key-scr_bet_rm_"] .stTooltipHoverTarget { width: auto !important; }
+div[class*="st-key-scr_bet_rm_"] button {
+    width: 16px !important;
+    height: 16px !important;
+    min-height: 16px !important;
+    padding: 0 !important;
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    line-height: 1 !important;
+    border-radius: 4px !important;
     background: #fff0f0 !important;
     color: #ff4b4b !important;
     border: 1px solid #fecaca !important;
-    border-radius: 6px !important;
-    font-size: 0.85rem !important;
-    font-weight: 700 !important;
-    padding: 3px 10px !important;
-    min-height: 28px !important;
     box-shadow: none !important;
-    line-height: 1;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
 }
-div[class*="st-key-scr_bet_rm_"] > .stButton > button:hover {
+div[class*="st-key-scr_bet_rm_"] button:hover {
     background: #fee2e2 !important;
     border-color: #f87171 !important;
 }
 
-/* ── 베팅 밴드 ─ 종목 카드 컬럼 경계 ───────────────────────────── */
-/* 밴드 종목 영역: 섹션 라벨 아래 컨텐츠를 약한 카드처럼 묶음 */
+/* ── 베팅 밴드 ─ 종목 카드 ─────────────────────────────────────── */
 .scr-bet-band-card {
     background: #ffffff;
-    border: 0.5px solid #e5e7eb;
+    border: 1px solid #e8eaed;
     border-radius: 10px;
-    padding: 10px 12px;
-    min-height: 72px;
+    padding: 9px 11px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.03);
 }
 
 /* ── 베팅 합계 칸 강조 ────────────────────────────────────────── */
 .scr-bet-total-card {
-    background: #f7f8fa;
-    border: 1px solid #e5e7eb;
+    background: #f9fafb;
+    border: 1px solid #e8eaed;
     border-left: 3px solid #ff4b4b;
     border-radius: 10px;
-    padding: 10px 12px;
-    min-height: 72px;
+    padding: 9px 11px;
+}
+
+/* 카드 헤더(종목명 + 현재가) — 우측 상단 × 버튼과 겹치지 않게 여백 */
+.scr-bet-hd {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 5px; font-size: 13px; color: #191f28; padding-right: 20px;
+}
+.scr-bet-hd .num { font-size: 11.5px; color: #8b95a1; }
+
+/* 카드 라벨-값 줄 (손절/주당/수량/투자 등) */
+.scr-bet-kv {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 11.5px; color: #8b95a1; padding: 1.5px 0;
+}
+.scr-bet-kv b { color: #191f28; font-weight: 600; }
+
+/* ── 베팅 설정 ─ 입력 세로 간격 최소화(밴드와 상하 리듬 맞춤) ───── */
+div[class*="st-key-scr_portfolio_value"],
+div[class*="st-key-scr_risk_pct"],
+div[class*="st-key-scr_stop_n_mult"],
+div[class*="st-key-scr_bet_split"] { margin-bottom: -0.55rem !important; }
+div[class*="st-key-scr_portfolio_value"] label,
+div[class*="st-key-scr_risk_pct"] label,
+div[class*="st-key-scr_stop_n_mult"] label,
+div[class*="st-key-scr_bet_split"] label {
+    margin-bottom: 0 !important; padding-bottom: 1px !important; font-size: 0.72rem !important;
 }
 </style>
 """

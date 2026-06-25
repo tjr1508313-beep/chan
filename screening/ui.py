@@ -814,20 +814,68 @@ def _render_filter_expander(spec: dict) -> None:
 
 
 def _render_filter_controls(spec: dict) -> None:
-    """지수 상태 배지 + 데이터 새로고침 + 즐겨찾기 토글을 본문에 렌더.
+    """한 줄 컨트롤(한글 문서의 한 줄처럼 가로 나열):
+    지수 상태 · 캐시 무시(force) · 즐겨찾기만 보기 · 전체 섹터 보기 ·
+    보기 방식(섹터별/전체 RS) · 새로고침 버튼.
 
-    사이드바 없이 본문 컨텍스트에서 직접 호출한다.
+    보기 방식 라디오/전체 섹터 토글도 여기서 렌더되며, view_mode 는 session_state 로 읽는다.
     """
-    # 현재 선택된 지수 코드 읽기 (위젯은 _render_rs_header 에서 렌더됨)
     index_options = spec["indices"]
     sel = st.session_state.get(_key(spec, "selected_index"), list(index_options.keys())[0])
     if sel not in index_options:
         sel = list(index_options.keys())[0]
     index_code = index_options[sel]
 
-    _render_index_status_badge(index_code)
-    _render_refresh_section(spec, index_code)
-    _render_fav_toggle_sidebar(spec)
+    job = st.session_state.get(_key(spec, "refresh_job"))
+    running = bool(job and job.get("running"))
+
+    c_stat, c_force, c_fav, c_all, c_view, c_btn = st.columns(
+        [1.5, 1.4, 1.7, 1.6, 2.3, 1.5], gap="small"
+    )
+    with c_stat:
+        _render_index_status_badge(index_code)
+    with c_force:
+        st.checkbox(
+            "캐시 무시(force)",
+            value=False,
+            key=_key(spec, "force_refresh"),
+            help=spec["force_help"],
+            disabled=running,
+        )
+    with c_fav:
+        _render_fav_toggle_sidebar(spec)
+    with c_all:
+        st.toggle(
+            "전체 섹터 보기",
+            key=_key(spec, "sector_show_all"),
+            help="기본은 수익률 상위 12개 섹터만 표시(저장은 전체).",
+        )
+    with c_view:
+        st.radio(
+            "보기 방식",
+            ["섹터별 보기", "전체 RS 보기"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key=_key(spec, "view_mode"),
+        )
+    with c_btn:
+        clicked = st.button(
+            spec["refresh_btn"],
+            help=spec["refresh_btn_help"],
+            key=_key(spec, "refresh_btn"),
+            disabled=running,
+        )
+
+    if clicked:
+        _start_refresh(
+            spec, index_code,
+            force=bool(st.session_state.get(_key(spec, "force_refresh"))),
+        )
+        st.rerun()
+    if running:
+        _refresh_progress_fragment(spec)
+    elif job:
+        _render_refresh_result(spec, job)
 
 
 def _get_inline_settings(spec: dict) -> tuple[str, int, int]:
@@ -1036,45 +1084,15 @@ def _refresh_progress_fragment(spec: dict) -> None:
         st.rerun(scope="app")
 
 
-def _render_refresh_section(spec: dict, index_code: str) -> None:
-    st.divider()
-    st.markdown("##### 데이터 새로고침")
-
-    job = st.session_state.get(_key(spec, "refresh_job"))
-    running = bool(job and job.get("running"))
-
-    force_refresh = st.checkbox(
-        "캐시 무시하고 전부 새로 받기 (force)",
-        value=False,
-        key=_key(spec, "force_refresh"),
-        help=spec["force_help"],
-        disabled=running,
-    )
-    if st.button(
-        spec["refresh_btn"],
-        width="stretch",
-        help=spec["refresh_btn_help"],
-        key=_key(spec, "refresh_btn"),
-        disabled=running,
-    ):
-        _start_refresh(spec, index_code, force=bool(force_refresh))
-        st.rerun()
-
-    if running:
-        _refresh_progress_fragment(spec)
-    elif job:
-        _render_refresh_result(spec, job)
-
-
 # ─── 헤더/배지/필터 요약 ───────────────────────────────────────────
 
 def _render_rs_header(
     spec: dict, index_code: str, index_display: str, rs_period: int, top_n: int
 ) -> None:
-    # 기간/종가 상세는 상단 시장 카드로 병합됨. 여기는 지수/기간/표시 컨트롤만.
+    # 기간/종가 상세는 상단 시장 카드로 병합됨. 한 줄: 지수·기간·표시 + 필터 설정(옆).
     index_options = spec["indices"]
 
-    c1, c2, c3, _spacer = st.columns([2, 1, 1, 2.2])
+    c1, c2, c3, c_filter = st.columns([1.1, 0.8, 0.8, 3.0], gap="small")
     with c1:
         st.selectbox(
             "지수",
@@ -1099,8 +1117,10 @@ def _render_rs_header(
             key=_key(spec, "top_n"),
             help="랭킹 테이블에 표시할 상위 종목 수 (전체 RS 보기)",
         )
-
-    st.caption(f"RS = 종목 {rs_period}일 수익률 - 지수 {rs_period}일 수익률")
+    with c_filter:
+        # 입력 라벨 높이만큼 내려 컨트롤과 세로 정렬
+        st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
+        _render_filter_expander(spec)
 
 
 def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
@@ -2079,13 +2099,6 @@ def _render_sector_view(
     show_all = bool(st.session_state.get(_key(spec, "sector_show_all"), False))
     display = summary if show_all else summary.head(12)
 
-    scope_label = "코스피+코스닥 합산" if scope == "KR" else _index_display_name(index_code)
-    st.caption(
-        f"{scope_label} · {period}일 수익률 기준 · 전체 {len(summary)}개 섹터 중 "
-        f"{'전체' if show_all else '상위 12'} 표시 · 저장 {updated} · "
-        f"타일을 누르면 종목이 펼쳐집니다"
-    )
-
     st.markdown(_build_sector_metrics_html(summary), unsafe_allow_html=True)
 
     # 멤버 필터 기준 = 코스피(KR) / 해당 지수(US) period일 수익률
@@ -2135,7 +2148,6 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
     index_display = _index_display_name(index_code)
 
     _render_rs_header(spec, index_code, index_display, rs_period, top_n)
-    _render_filter_expander(spec)
     _render_filter_controls(spec)
 
     if stats.get("total", 0) == 0 or not tickers:
@@ -2177,22 +2189,8 @@ def _render_screening_section(spec: dict, settings: tuple) -> None:
             )
         return
 
-    vcol1, vcol2 = st.columns([2.2, 1.2])
-    with vcol1:
-        view_mode = st.radio(
-            "보기 방식",
-            ["섹터별 보기", "전체 RS 보기"],
-            horizontal=True,
-            label_visibility="collapsed",
-            key=_key(spec, "view_mode"),
-        )
-    with vcol2:
-        if view_mode == "섹터별 보기":
-            st.toggle(
-                "전체 섹터 보기",
-                key=_key(spec, "sector_show_all"),
-                help="기본은 수익률 상위 12개 섹터만 표시(저장은 전체).",
-            )
+    # 보기 방식 라디오는 상단 한 줄 컨트롤(_render_filter_controls)에서 렌더됨
+    view_mode = st.session_state.get(_key(spec, "view_mode"), "섹터별 보기")
 
     if view_mode == "섹터별 보기":
         _render_sector_view(spec, index_code, rs_period, filter_config, tickers)
@@ -2412,41 +2410,45 @@ def _render_namuh_download(spec: dict, ranked: pd.DataFrame, index_code: str = "
 
 # ─── 퍼블릭 엔트리 ─────────────────────────────────────────────────
 
-def _render_remote_sync_badge() -> None:
+def _render_sync_status_inline() -> None:
+    """탭 줄 우측에 한 줄로 표시하는 컴팩트 동기화 상태 텍스트."""
     info = get_last_sync_info()
-
     if info is None:
         st.markdown(
-            f"<div style='font-size:0.78rem; color:{COLOR_MUTED};'>"
-            f"자동 갱신: <span style='color:#ff9500;'>원격 캐시 미확인</span>"
-            f"</div>",
+            f"<div style='text-align:right; font-size:0.74rem; color:{COLOR_MUTED}; "
+            f"padding-top:9px;'>자동 갱신 "
+            f"<span style='color:#ff9500;'>원격 캐시 미확인</span></div>",
             unsafe_allow_html=True,
         )
+        return
+
+    if info.status == "synced":
+        color, label = COLOR_PROFIT, "방금 동기화"
+    elif info.status == "up_to_date":
+        color, label = "#10b981", "최신"
+    elif info.status == "no_remote":
+        color, label = "#ff9500", "원격 캐시 없음"
+    elif info.status == "disabled":
+        color, label = COLOR_MUTED, "동기화 꺼짐"
     else:
-        if info.status == "synced":
-            color, label = COLOR_PROFIT, "방금 동기화"
-        elif info.status == "up_to_date":
-            color, label = "#10b981", "최신"
-        elif info.status == "no_remote":
-            color, label = "#ff9500", "원격 캐시 없음"
-        elif info.status == "disabled":
-            color, label = COLOR_MUTED, "동기화 꺼짐"
-        else:
-            color, label = COLOR_LOSS, info.status
+        color, label = COLOR_LOSS, info.status
 
-        when = info.remote_kst or info.remote_stamp or "?"
-        market = info.remote_market or ""
-        market_str = f" · {market.upper()}" if market else ""
-        st.markdown(
-            f"<div style='font-size:0.78rem; color:{COLOR_MUTED}; line-height:1.35;'>"
-            f"자동 갱신: <span style='color:{color}; font-weight:600;'>{label}</span><br>"
-            f"<span style='color:{COLOR_MUTED};'>마지막: {when}{market_str}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+    when = info.remote_kst or info.remote_stamp or "?"
+    market = info.remote_market or ""
+    market_str = f" · {market.upper()}" if market else ""
+    st.markdown(
+        f"<div style='text-align:right; font-size:0.74rem; color:{COLOR_MUTED}; "
+        f"padding-top:9px; line-height:1.3;'>자동 갱신 "
+        f"<span style='color:{color}; font-weight:600;'>{label}</span> "
+        f"· 마지막 {when}{market_str}</div>",
+        unsafe_allow_html=True,
+    )
 
+
+def _render_sync_now_button() -> None:
+    """탭 줄 우측 끝의 '원격 캐시 받기' 버튼 + 동기화 동작."""
     if st.button(
-        "지금 원격 캐시 받기",
+        "⟳ 원격 캐시 받기",
         width="stretch",
         key="scr_sync_now_btn",
         help=(
@@ -2489,21 +2491,25 @@ def _render_market_tab(spec: dict) -> None:
 
     컨트롤(지수/기간/표시/필터/새로고침/즐겨찾기)은 스크리닝 섹션 상단 본문에 렌더됨.
     """
-    # 원격 동기화 배지 — 탭 상단에 한 번 표시
-    _render_remote_sync_badge()
-
     # 필터 config 읽기 — 위젯은 _render_screening_section 안 컨트롤 줄에서 렌더
     filter_config = _read_filter_config(spec)
     index_code, rs_period, top_n = _get_inline_settings(spec)
     settings = (index_code, rs_period, top_n, filter_config)
 
-    top_l, top_r = st.columns([1.5, 1], gap="medium")
-    with top_l:
+    # 1행: 지수 카드 │ 지수 차트 (옆으로 나란히 — 세로 절약)
+    card_l, card_r = st.columns([1, 1.15], gap="medium")
+    with card_l:
         _render_market_card(spec, settings)
+    with card_r:
         _render_market_index_chart(spec, settings[0])
-    with top_r:
+
+    # 2행: 베팅 설정(좁게) │ 베팅 종목 밴드(넓게 — 4종목+합계 여유)
+    bet_l, bet_r = st.columns([1, 5], gap="medium")
+    with bet_l:
         _render_betting_panel(spec, position="settings")
-    _render_betting_panel(spec, position="band")
+    with bet_r:
+        _render_betting_panel(spec, position="band")
+
     _render_screening_section(spec, settings)
 
 
@@ -2526,19 +2532,27 @@ def _render_betting_panel(spec: dict, *, position: str) -> None:
     )
 
     if position == "settings":
-        st.markdown("##### 베팅 설정")
+        st.markdown(
+            f"<div style='display:flex; align-items:baseline; justify-content:space-between; "
+            f"gap:8px; margin-bottom:4px;'>"
+            f"<span style='font-weight:700; font-size:1rem; color:{COLOR_TEXT};'>베팅 설정</span>"
+            f"<span style='font-size:0.66rem; color:{COLOR_MUTED}; text-align:right; "
+            f"line-height:1.3; white-space:nowrap;'>"
+            f"예산 ₩{result['total_risk']:,}<br>종목당 ₩{result['per_risk']:,}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
         c = st.columns(2)
         with c[0]:
-            st.number_input("자산(만원)", min_value=0, step=1, format="%d",
+            st.number_input("자산(만)", min_value=0, step=1, format="%d",
                             key="scr_portfolio_value", on_change=_save_prefs)
-            st.number_input("손절 N배", min_value=0.5, max_value=5.0, step=0.5,
+            st.number_input("손절N", min_value=0.5, max_value=5.0, step=0.5,
                             format="%.1f", key="scr_stop_n_mult", on_change=_save_prefs)
         with c[1]:
-            st.number_input("리스크 %", min_value=0.1, max_value=10.0, step=0.1,
+            st.number_input("리스크%", min_value=0.1, max_value=10.0, step=0.1,
                             format="%.1f", key="scr_risk_pct", on_change=_save_prefs)
-            st.number_input("분할 수", min_value=1, max_value=5, step=1, format="%d",
+            st.number_input("분할", min_value=1, max_value=5, step=1, format="%d",
                             key="scr_bet_split", on_change=_save_prefs)
-        st.caption(f"총 리스크 예산 ₩{result['total_risk']:,} · 종목당 ₩{result['per_risk']:,}")
         return
 
     # position == "band"
@@ -2555,22 +2569,38 @@ def _render_betting_panel(spec: dict, *, position: str) -> None:
             stop_txt = f"{cur}{row['stop_price']:,.{dec}f}" if row["stop_price"] is not None else "—"
             sh = row["shares"]
             inv = f"{cur}{row['invest_native']:,.{dec}f}" if sh else "—"
+            # × 버튼을 카드보다 먼저 렌더 → CSS로 카드 우측 상단에 겹쳐 배치
+            if st.button("×", key=f"scr_bet_rm_{spec_code}_{row['ticker']}",
+                         help="베팅 종목에서 제거"):
+                to_remove.append(row["ticker"])
             st.markdown(
-                f"**{row['name']}**  {cur}{row['price']:,.{dec}f}<br>"
-                f"<span style='color:{COLOR_MUTED};font-size:0.78rem'>"
-                f"손절 {stop_txt} · 주당 {cur}{row['per_share_risk']:,.{dec}f}</span><br>"
-                f"<span style='color:{COLOR_PROFIT};font-weight:600'>{sh:,}주 · {inv}</span>",
+                f"<div class='scr-bet-band-card'>"
+                f"<div class='scr-bet-hd'><b>{row['name']}</b>"
+                f"<span class='num'>{cur}{row['price']:,.{dec}f}</span></div>"
+                f"<div class='scr-bet-kv'><span>손절</span>"
+                f"<b class='num' style='color:{COLOR_LOSS}'>{stop_txt}</b></div>"
+                f"<div class='scr-bet-kv'><span>주당</span>"
+                f"<b class='num'>{cur}{row['per_share_risk']:,.{dec}f}</b></div>"
+                f"<div class='scr-bet-kv'><span>수량</span><b class='num'>{sh:,}주</b></div>"
+                f"<div class='scr-bet-kv'><span>투자</span>"
+                f"<b class='num' style='color:{COLOR_PROFIT}'>{inv}</b></div>"
+                f"</div>",
                 unsafe_allow_html=True,
             )
-            if st.button("×", key=f"scr_bet_rm_{spec_code}_{row['ticker']}"):
-                to_remove.append(row["ticker"])
     with cols[min(len(result["rows"]), 5)]:
         st.markdown(
-            f"**합계**<br><span style='font-size:0.8rem'>"
-            f"투자 ₩{result['total_invest_won']:,}<br>"
-            f"리스크 ₩{result['total_risk_used_won']:,}<br>"
-            f"자산대비 {result['asset_pct']*100:.1f}%<br>"
-            f"잔여 ₩{result['cash_left_won']:,}</span>",
+            f"<div class='scr-bet-total-card'>"
+            f"<div class='scr-bet-hd'><b>합계</b>"
+            f"<span style='font-size:10.5px;color:{COLOR_MUTED}'>{len(basket)}종목</span></div>"
+            f"<div class='scr-bet-kv'><span>투자</span>"
+            f"<b class='num'>₩{result['total_invest_won']:,}</b></div>"
+            f"<div class='scr-bet-kv'><span>리스크</span>"
+            f"<b class='num'>₩{result['total_risk_used_won']:,}</b></div>"
+            f"<div class='scr-bet-kv'><span>자산대비</span>"
+            f"<b class='num'>{result['asset_pct']*100:.1f}%</b></div>"
+            f"<div class='scr-bet-kv'><span>잔여</span>"
+            f"<b class='num'>₩{result['cash_left_won']:,}</b></div>"
+            f"</div>",
             unsafe_allow_html=True,
         )
     for t in to_remove:
@@ -2580,9 +2610,13 @@ def _render_betting_panel(spec: dict, *, position: str) -> None:
 
 
 def _render_tab_bar() -> str:
-    """상단 탭 버튼 바를 그리고 활성 탭 코드("kr" | "us")를 반환."""
+    """상단 한 줄: [한국주식][미국주식] 탭 + (우측) 동기화 상태 · 원격 캐시 버튼.
+
+    활성 탭 코드("kr" | "us")를 반환.
+    """
     tabs = [("kr", "한국주식"), ("us", "미국주식")]
-    cols = st.columns(len(tabs) + 4)
+    # 탭 2칸 + 동기화 상태(넓게) + 원격 캐시 버튼 1칸 — 모두 한 줄
+    cols = st.columns([1.1, 1.1, 4.4, 1.7])
     for i, (code, label) in enumerate(tabs):
         with cols[i]:
             is_on = st.session_state.get("scr_active_tab") == code
@@ -2593,4 +2627,8 @@ def _render_tab_bar() -> str:
             ):
                 st.session_state["scr_active_tab"] = code
                 st.rerun()
+    with cols[2]:
+        _render_sync_status_inline()
+    with cols[3]:
+        _render_sync_now_button()
     return st.session_state.get("scr_active_tab", "kr")
