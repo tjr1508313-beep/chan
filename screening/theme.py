@@ -63,7 +63,16 @@ html, body, .stApp {{
 
 /* ───── 배경/텍스트 ───── */
 .stApp {{ background-color: {COLOR_BG}; color: {COLOR_TEXT}; }}
-.main .block-container {{ padding-top: 0rem; padding-bottom: 3rem; max-width: 1480px; }}
+.main .block-container,
+[data-testid="stMainBlockContainer"],
+[data-testid="stAppViewBlockContainer"] {{ padding-top: 2.4rem !important; padding-bottom: 3rem; max-width: 1480px; }}
+/* 상단 헤더 바(메뉴/Deploy)를 얇게 + 투명 → 콘텐츠를 위로 */
+[data-testid="stHeader"] {{ height: 2.4rem !important; min-height: 2.4rem !important; background: transparent !important; }}
+[data-testid="stToolbar"] {{ height: 2.4rem !important; min-height: 0 !important; }}
+/* CSS/JS 주입용 빈 요소(<style> 태그·notranslate iframe)가 vertical-block gap을
+   먹어 상단에 ~64px 여백을 만들므로 컨테이너째 제거(스타일은 숨겨도 전역 적용 유지). */
+[data-testid="stElementContainer"]:has(style),
+[data-testid="stElementContainer"]:has(> iframe[title="st.iframe"]) {{ display: none !important; }}
 h1, h2, h3, h4, h5, h6 {{ color: {COLOR_TEXT} !important; letter-spacing: -0.02em; font-weight: 800; }}
 p, span, label, div {{ color: {COLOR_TEXT}; }}
 .stCaption, [data-testid="stCaptionContainer"] {{ color: {COLOR_MUTED} !important; }}
