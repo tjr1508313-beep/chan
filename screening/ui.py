@@ -689,7 +689,7 @@ def _key(spec: dict, suffix: str) -> str:
 def _render_index_status_badge(index_code: str) -> None:
     idx_cache = cache_load_index(index_code, days=5)
     cached = idx_cache is not None and not idx_cache.empty
-    color = "#1a9cff" if cached else "#ff9500"
+    color = "#3a6ea5" if cached else "#b8860b"
     text = "데이터 준비됨" if cached else "데이터 없음"
     st.markdown(
         f"<div style='font-size:0.78rem; color:{COLOR_MUTED}; margin-top:-4px;'>"
@@ -1882,24 +1882,25 @@ def _sector_tint(score: object) -> dict:
     if s != s:  # NaN
         s = 0.0
     intensity = min(abs(s) / _SECTOR_TINT_SCALE, 1.0)
+    # Editorial Mono: 채도 낮춘 미세 지면 틴트 + 잉크 레드/블루 강도. 색면이 아닌 헤어라인·악센트 바로 강도 표현.
     if s >= 0:
         return {
-            "tile_bg": _hex_blend("#fff5f5", "#ffd5d5", intensity),
-            "pill_bg": _hex_blend("#fff4f4", "#ffe3e3", intensity),
-            "rail": _hex_blend("#ffd0d0", "#ff4b4b", intensity),
-            "chip_bg": _hex_blend("#fff0f0", "#ff4b4b", intensity),
-            "chip_fg": "#ffffff" if intensity > 0.55 else "#c0392b",
-            "fg": "#c0392b",
-            "bar": "#ff4b4b",
+            "tile_bg": _hex_blend("#ffffff", "#f7ece9", intensity),
+            "pill_bg": _hex_blend("#faf6f4", "#f1ddd8", intensity),
+            "rail": _hex_blend("#e3c9c3", "#c8372a", intensity),
+            "chip_bg": _hex_blend("#f7ece9", "#c8372a", intensity),
+            "chip_fg": "#ffffff" if intensity > 0.55 else "#c8372a",
+            "fg": "#c8372a",
+            "bar": "#c8372a",
         }
     return {
-        "tile_bg": _hex_blend("#eef6ff", "#d9ecff", intensity),
-        "pill_bg": _hex_blend("#eef6ff", "#dbecff", intensity),
-        "rail": _hex_blend("#cfe6ff", "#1a9cff", intensity),
-        "chip_bg": _hex_blend("#eef6ff", "#1a9cff", intensity),
-        "chip_fg": "#ffffff" if intensity > 0.55 else "#1a7fd0",
-        "fg": "#1a7fd0",
-        "bar": "#1a9cff",
+        "tile_bg": _hex_blend("#ffffff", "#eaf0f6", intensity),
+        "pill_bg": _hex_blend("#f6f8fb", "#dfe9f3", intensity),
+        "rail": _hex_blend("#cdd9e6", "#3a6ea5", intensity),
+        "chip_bg": _hex_blend("#eaf0f6", "#3a6ea5", intensity),
+        "chip_fg": "#ffffff" if intensity > 0.55 else "#3a6ea5",
+        "fg": "#3a6ea5",
+        "bar": "#3a6ea5",
     }
 
 
@@ -1915,7 +1916,7 @@ def _build_sector_metrics_html(summary: pd.DataFrame) -> str:
         avg_rs = float("nan")
     top = summary.iloc[0]
     top_fg = _sector_tint(top.sector_score)["fg"]
-    rs_fg = "#ff4b4b" if (avg_rs == avg_rs and avg_rs >= 0) else "#1a9cff"
+    rs_fg = "#c8372a" if (avg_rs == avg_rs and avg_rs >= 0) else "#3a6ea5"
     return (
         "<div class='scr-sec-metrics'>"
         "<div class='scr-sec-metric'><div class='lb'>상승 섹터</div>"
@@ -1944,22 +1945,24 @@ def _build_sector_tiles_css(summary: pd.DataFrame, code: str, selected: object) 
         t = _sector_tint(row.sector_score)
         key = f"sectile_{code}_{int(row.rank)}"
         is_sel = str(row.sector) == str(selected)
-        border = t["rail"] if is_sel else "#eef0f2"
-        bw = "2px" if is_sel else "1px"
+        # Editorial Mono: 헤어라인 + 좌측 강도 악센트 바. 선택 시 잉크 블랙 테두리.
+        edge = "#16170f" if is_sel else "#e7e6e1"
+        rail = "#16170f" if is_sel else t["rail"]
         parts.append(
             f".st-key-{key} button{{background:{t['tile_bg']}!important;"
-            f"border:{bw} solid {border}!important;border-radius:12px!important;"
-            f"min-height:88px!important;padding:12px 16px!important;display:flex!important;"
+            f"border:1px solid {edge}!important;border-left:3px solid {rail}!important;"
+            f"border-radius:4px!important;"
+            f"min-height:74px!important;padding:11px 14px!important;display:flex!important;"
             f"flex-direction:column!important;align-items:flex-start!important;"
-            f"justify-content:center!important;gap:4px!important;}}"
-            f".st-key-{key} button p{{color:{t['fg']}!important;text-align:left!important;"
+            f"justify-content:center!important;gap:3px!important;}}"
+            f".st-key-{key} button p{{text-align:left!important;"
             f"margin:0!important;font-family:Pretendard,-apple-system,'Malgun Gothic',"
             f"sans-serif!important;letter-spacing:-0.3px!important;}}"
-            f".st-key-{key} button p:first-child{{font-size:20px!important;"
-            f"font-weight:800!important;line-height:1.15!important;}}"
-            f".st-key-{key} button p:last-child{{font-size:15px!important;"
-            f"font-weight:700!important;line-height:1.1!important;opacity:0.92;}}"
-            f".st-key-{key} button:hover{{border-color:{t['rail']}!important;}}"
+            f".st-key-{key} button p:first-child{{font-size:17px!important;color:#16170f!important;"
+            f"font-weight:600!important;line-height:1.15!important;}}"
+            f".st-key-{key} button p:last-child{{font-size:14px!important;color:{t['fg']}!important;"
+            f"font-weight:600!important;line-height:1.1!important;}}"
+            f".st-key-{key} button:hover{{border-color:#16170f!important;}}"
         )
     parts.append("</style>")
     return "".join(parts)
@@ -2020,7 +2023,7 @@ def _render_sector_member_rows(spec: dict, members: pd.DataFrame, rs_period: int
         rs = r.get("rs")
         rsw = r.get("rs_weighted")
         dv = r.get("avg_traded_value_20d")
-        clr = "#ff4b4b" if rn >= 0 else "#1a9cff"
+        clr = "#c8372a" if rn >= 0 else "#3a6ea5"
 
         cols = st.columns(widths, gap="small")
         cols[0].markdown(

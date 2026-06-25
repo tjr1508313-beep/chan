@@ -17,23 +17,24 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 # ─── 기존 호환 상수 ──────────────────────────────────────
-COLOR_BG = "#f2f4f6"
+# Editorial Mono 팔레트 (design/redesign-candidates) — 오프화이트 지면 + 잉크 블랙 + 헤어라인
+COLOR_BG = "#fbfbf9"
 COLOR_CARD = "#ffffff"
-COLOR_PROFIT = "#ff4b4b"
-COLOR_LOSS = "#3182f6"
-COLOR_TEXT = "#191f28"
-COLOR_MUTED = "#8b95a1"
-COLOR_BORDER = "#e8eaed"
-COLOR_HOVER = "#f9fafb"
-COLOR_ACCENT = "#3182f6"
+COLOR_PROFIT = "#c8372a"
+COLOR_LOSS = "#3a6ea5"
+COLOR_TEXT = "#16170f"
+COLOR_MUTED = "#a3a299"
+COLOR_BORDER = "#e7e6e1"
+COLOR_HOVER = "#f3f2ee"
+COLOR_ACCENT = "#16170f"
 
 # ─── 신규 토큰 (필요 시 ui.py 에서 import) ────────────────
-COLOR_SUB = "#4e5968"
-COLOR_BORDER_SOFT = "#f1f3f5"
-COLOR_SURFACE2 = "#f9fafb"
-COLOR_PROFIT_SOFT = "#fff0f0"
-COLOR_LOSS_SOFT = "#eff6ff"
-COLOR_GOLD = "#f59e0b"
+COLOR_SUB = "#76756c"
+COLOR_BORDER_SOFT = "#eeede8"
+COLOR_SURFACE2 = "#f6f5f1"
+COLOR_PROFIT_SOFT = "#f7ece9"
+COLOR_LOSS_SOFT = "#eaf0f6"
+COLOR_GOLD = "#b8860b"
 
 
 _CSS = f"""
@@ -508,12 +509,70 @@ div[class*="st-key-scr_bet_split"] label {
 """
 
 
+_EDITORIAL_CSS = """
+<style>
+/* ===== Editorial Mono — 평평·헤어라인·강한 타이포 (토스 위 오버라이드) ===== */
+h1,h2,h3,h4,h5,h6 { font-weight: 600 !important; letter-spacing: -0.02em !important; }
+/* 카드/메트릭/익스팬더/알림: 그림자 제거 + 헤어라인 + 작은 라운드 */
+div[data-testid="stMetric"],
+[data-testid="stExpander"],
+[data-testid="stAlert"] {
+    box-shadow: none !important; border-radius: 4px !important; border: 1px solid #e7e6e1 !important;
+}
+[data-testid="stExpander"] summary { font-weight: 600 !important; }
+/* 입력/셀렉트: 직선적·헤어라인·모노 숫자 */
+.stTextInput input, .stNumberInput input,
+.stSelectbox [data-baseweb="select"] > div {
+    border-radius: 4px !important; border-color: #e7e6e1 !important; background: #ffffff !important;
+}
+.stNumberInput input, .stTextInput input { font-family: 'JetBrains Mono', ui-monospace, monospace !important; }
+.stNumberInput button { background:#f6f5f1 !important; border-color:#e7e6e1 !important; color:#76756c !important; }
+/* 일반 버튼: 플랫 헤어라인 */
+.stButton > button {
+    border-radius: 4px !important; box-shadow: none !important;
+    border: 1px solid #e7e6e1 !important; background: #ffffff !important;
+    color: #16170f !important; font-weight: 500 !important;
+}
+.stButton > button:hover { background:#f3f2ee !important; border-color:#16170f !important; color:#16170f !important; }
+/* 탭: 하단 잉크 라인(active) — 토스 빨강 강조 제거 */
+div[class*="st-key-scr_tab_btn_"] > .stButton > button {
+    border: none !important; border-radius: 0 !important; background: transparent !important;
+    box-shadow: none !important; font-weight: 600 !important;
+}
+div[class*="st-key-scr_tab_btn_"] > .stButton > button[kind="primary"],
+div[class*="st-key-scr_tab_btn_"] > .stButton > button[kind="primaryFormSubmit"] {
+    border-bottom: 2px solid #16170f !important; color:#16170f !important; box-shadow:none !important;
+}
+div[class*="st-key-scr_tab_btn_"] > .stButton > button[kind="secondary"] {
+    color:#a3a299 !important; border-bottom: 2px solid transparent !important;
+}
+/* 베팅 카드: 헤어라인 + 점선 구분 + 잉크 헤더선 */
+.scr-bet-band-card { border: 1px solid #e7e6e1 !important; border-radius: 4px !important; box-shadow: none !important; }
+.scr-bet-total-card { border: 1px solid #e7e6e1 !important; border-left: 2px solid #c8372a !important; border-radius: 4px !important; background:#faf9f6 !important; }
+.scr-bet-hd { border-bottom: 1px solid #16170f; padding-bottom: 4px; }
+.scr-bet-kv { border-bottom: 1px dotted #e7e6e1; }
+.scr-bet-kv:last-child { border-bottom: none; }
+/* × 제거 버튼: 에디토리얼 레드 */
+div[class*="st-key-scr_bet_rm_"] button {
+    background:#f7ece9 !important; color:#c8372a !important; border:1px solid #e3c9c3 !important; border-radius:3px !important;
+}
+div[class*="st-key-scr_bet_rm_"] button:hover { background:#f0ddd8 !important; border-color:#c8372a !important; }
+/* 섹터 요약/카드: 플랫 헤어라인 + 잉크 위계 */
+.scr-sec-metric { border:1px solid #e7e6e1 !important; border-radius:4px !important; box-shadow:none !important; }
+.scr-sec-metric .lb { color:#a3a299 !important; letter-spacing:.4px; text-transform:uppercase; font-size:11px !important; }
+.scr-sec-metric .vl { font-weight:600 !important; color:#16170f !important; }
+.scr-sec-card { border:1px solid #e7e6e1 !important; border-radius:4px !important; }
+</style>
+"""
+
+
 def apply_theme() -> None:
-    """스크리닝 앱 Toss-style 라이트 테마 CSS 주입.
+    """스크리닝 앱 Editorial Mono 라이트 테마 CSS 주입.
 
     Chrome 자동 번역 차단(notranslate) 포함.
     """
     st.markdown(_CSS, unsafe_allow_html=True)
     st.markdown(_SECTOR_CSS, unsafe_allow_html=True)
     st.markdown(_BETTING_CSS, unsafe_allow_html=True)
+    st.markdown(_EDITORIAL_CSS, unsafe_allow_html=True)
     components.html(_NOTRANSLATE_JS, height=0)

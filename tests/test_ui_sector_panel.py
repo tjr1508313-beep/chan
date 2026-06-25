@@ -80,12 +80,12 @@ def test_hex_blend_midpoint():
 
 
 def test_sector_tint_sign_and_nan():
-    assert ui._sector_tint(0.18)["fg"] == "#c0392b"      # 강세 → 빨강
-    assert ui._sector_tint(-0.05)["fg"] == "#1a7fd0"     # 약세 → 파랑
-    assert ui._sector_tint(float("nan"))["fg"] == "#c0392b"  # NaN → 0 취급(빨강계)
+    assert ui._sector_tint(0.18)["fg"] == "#c8372a"      # 강세 → 빨강(Editorial)
+    assert ui._sector_tint(-0.05)["fg"] == "#3a6ea5"     # 약세 → 파랑(Editorial)
+    assert ui._sector_tint(float("nan"))["fg"] == "#c8372a"  # NaN → 0 취급(빨강계)
     # 강도가 클수록 칩 글자색이 흰색으로 전환
     assert ui._sector_tint(0.18)["chip_fg"] == "#ffffff"
-    assert ui._sector_tint(0.01)["chip_fg"] == "#c0392b"
+    assert ui._sector_tint(0.01)["chip_fg"] == "#c8372a"
 
 
 def _sample_summary():
@@ -113,7 +113,7 @@ def test_build_sector_tiles_css_keys_and_selection():
     # 섹터 순위(rank)별 per-key 규칙
     assert ".st-key-sectile_KS11_1 button" in css
     assert ".st-key-sectile_KS11_2 button" in css
-    # 선택된 섹터(2차전지, rank 2)는 2px 강조 테두리
-    assert "border:2px solid" in css
+    # 선택된 섹터(2차전지, rank 2)는 잉크 블랙 테두리(Editorial)
+    assert "border:1px solid #16170f" in css
     # 약세 섹터(은행)는 파랑 글자색
-    assert "#1a7fd0" in css
+    assert "#3a6ea5" in css
