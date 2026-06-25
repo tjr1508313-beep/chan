@@ -466,6 +466,35 @@ def _render_market_card(spec: dict, settings: tuple) -> None:
     )
 
 
+def _make_index_chart_key(spec_code: str, index_code: str) -> str:
+    """지수 차트 컴포넌트 키 생성. ^ 등 CSS 특수문자 제거."""
+    safe = index_code.replace("^", "").replace("-", "_")
+    return f"lwc_mkt_idx_{spec_code}_{safe}"
+
+
+def _apply_chart_stability(chart: Any, stable_id: str) -> None:
+    """chart_id를 안정값으로 고정 + handle_response noop.
+
+    Chart 객체는 매 리런마다 새로 생성되므로 id(self)가 바뀌어
+    chart_id="chart-{id(self)}"도 바뀐다. 프론트엔드(iframe)는 이를
+    감지해 재초기화하고 get_pane_state 이벤트를 setComponentValue()로 전송
+    → 추가 리런 트리거 → 두 차트가 연쇄 리런하며 사라지는 현상.
+
+    chart_id를 key 기반 상수로 고정하면 iframe이 재초기화하지 않으므로
+    이벤트 전송 → 리런 루프가 차단된다.
+    """
+    # (1) handle_response noop: 응답 처리 중 components.html(height=0) 삽입 차단
+    chart._chart_renderer.handle_response = lambda *a, **kw: None
+    # (2) stable chart_id: 리런해도 동일 값 → iframe 재초기화 방지
+    _orig_tfc = chart.to_frontend_config
+    def _patched_tfc():
+        cfg = _orig_tfc()
+        for chart_obj in cfg.get("charts", []):
+            chart_obj["chartId"] = stable_id
+        return cfg
+    chart.to_frontend_config = _patched_tfc
+
+
 def _index_chart_svg(df: pd.DataFrame, height: int = 190) -> str:
     """지수 OHLC를 정적 SVG 캔들(+MA5)로 그린다.
 
@@ -602,11 +631,8 @@ def _render_market_index_chart(spec: dict, index_code: str) -> None:
             localization=LocalizationOptions(locale="ko-KR", date_format="yy.MM.dd"),
         ),
     )
-    chart_key = f"lwc_market_index_{spec['code']}_{index_code}"
-    _ss_key = f"_chart_series_configs_{chart_key}"
-    if _ss_key in st.session_state:
-        del st.session_state[_ss_key]
-    chart._chart_renderer.handle_response = lambda *args, **kwargs: None
+    chart_key = _make_index_chart_key(spec["code"], index_code)
+    _apply_chart_stability(chart, f"stable-{chart_key}")
     chart.render(key=chart_key)
     st.caption(
         f"최근 {len(df)}일 완성 봉 · 마지막 봉 {df.index[-1].strftime('%Y-%m-%d')}"
@@ -1782,17 +1808,7 @@ def _render_chart(
 
     chart = Chart(series=series, options=chart_opts)
     chart_key = f"lwc_chart_{spec['code']}_{ticker}_{key_suffix}"
-    # 이전 렌더의 시리즈 설정 잔재 제거
-    _ss_key = f"_chart_series_configs_{chart_key}"
-    if _ss_key in st.session_state:
-        del st.session_state[_ss_key]
-    # handle_response 비활성: 차트 프론트엔드가 보내는 get_pane_state 등의
-    # API 응답 처리를 끄면 components.html(height=0) 고스트 iframe 삽입이
-    # 사라진다. 이 고스트가 Streamlit 요소 트리를 흔들어
-    #   (1) 차트 재렌더 churn → 비대화형(스냅샷처럼 굳음)
-    #   (2) 다른 컬럼 차트 렌더 시 기존 차트가 트리에서 밀려 사라짐
-    # 캔들/라인은 초기 config(단방향)로 그려지므로 차트 표시에는 영향 없음.
-    chart._chart_renderer.handle_response = lambda *args, **kwargs: None
+    _apply_chart_stability(chart, f"stable-{chart_key}")
     chart.render(key=chart_key)
 
     _render_chart_metrics(spec, df, atr9)
