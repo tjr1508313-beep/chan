@@ -528,20 +528,86 @@ def _index_chart_svg(df: pd.DataFrame, height: int = 190) -> str:
 
 
 def _render_market_index_chart(spec: dict, index_code: str) -> None:
-    """카드 너비 안에 미리 계산된 최근 110일 지수 완성 봉을 정적 SVG로 표시.
+    """카드 너비 안에 미리 계산된 최근 110일 지수 완성 봉을 대화형 차트로 표시.
 
-    정적 SVG라 다른 클릭(섹터 타일 등)으로 리런돼도 차트가 사라지지 않는다.
-    (대화형 lightweight-charts 는 iframe 공존/리런 시 사라지는 문제가 있어 제외)
+    handle_response 를 비활성해 고스트 components.html(height=0) 삽입을 막으면
+    종목 차트와 공존해도 서로를 밀어내지 않는다. 십자선·줌은 iframe 내부 동작이라
+    handle_response 와 무관하게 유지된다.
     """
     df = ui_load_index_chart_df(index_code)
     if df is None or df.empty:
         st.caption("지수 차트는 다음 데이터 새로고침 후 표시됩니다.")
         return
 
-    svg = _index_chart_svg(df, height=190)
-    if not svg:
+    view_times = df.index.tz_localize("UTC")
+    candle_df = pd.DataFrame(
+        {
+            "time": view_times,
+            "open": df["Open"].values,
+            "high": df["High"].values,
+            "low": df["Low"].values,
+            "close": df["Close"].values,
+        }
+    ).dropna()
+    if candle_df.empty:
         return
-    st.markdown(svg, unsafe_allow_html=True)
+
+    ohlc = candle_df[["open", "high", "low", "close"]]
+    candle_df["high"] = ohlc.max(axis=1)
+    candle_df["low"] = ohlc.min(axis=1)
+
+    precision = int(spec.get("chart_price_precision", 2))
+    min_move = float(spec.get("chart_price_min_move", 0.01))
+    price_fmt = PriceFormatOptions(type="price", precision=precision, min_move=min_move)
+
+    candle = CandlestickSeries(
+        data=candle_df,
+        column_mapping={"time": "time", "open": "open", "high": "high",
+                        "low": "low", "close": "close"},
+        pane_id=0,
+    )
+    candle.up_color = _COLOR_UP
+    candle.down_color = _COLOR_DOWN
+    candle.border_up_color = _COLOR_UP
+    candle.border_down_color = _COLOR_DOWN
+    candle.wick_up_color = _COLOR_UP
+    candle.wick_down_color = _COLOR_DOWN
+    candle.price_format = price_fmt
+
+    ma5_df = pd.DataFrame({
+        "time": candle_df["time"],
+        "value": candle_df["close"].rolling(5).mean(),
+    }).dropna(subset=["value"])
+    ma5_line = LineSeries(
+        data=ma5_df,
+        column_mapping={"time": "time", "value": "value"},
+        pane_id=0,
+    )
+    ma5_line.line_options = LineOptions(color=_COLOR_MA5, line_width=1, line_visible=True)
+    ma5_line.price_format = price_fmt
+
+    chart = Chart(
+        series=[candle, ma5_line],
+        options=ChartOptions(
+            height=190,
+            layout=LayoutOptions(
+                text_color=COLOR_MUTED,
+                font_size=10,
+                font_family=(
+                    "Pretendard, -apple-system, BlinkMacSystemFont, "
+                    "'Segoe UI', Roboto, sans-serif"
+                ),
+            ),
+            time_scale=TimeScaleOptions(time_visible=True, seconds_visible=False),
+            localization=LocalizationOptions(locale="ko-KR", date_format="yy.MM.dd"),
+        ),
+    )
+    chart_key = f"lwc_market_index_{spec['code']}_{index_code}"
+    _ss_key = f"_chart_series_configs_{chart_key}"
+    if _ss_key in st.session_state:
+        del st.session_state[_ss_key]
+    chart._chart_renderer.handle_response = lambda *args, **kwargs: None
+    chart.render(key=chart_key)
     st.caption(
         f"최근 {len(df)}일 완성 봉 · 마지막 봉 {df.index[-1].strftime('%Y-%m-%d')}"
     )
