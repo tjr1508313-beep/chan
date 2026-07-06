@@ -940,7 +940,7 @@ def _render_filter_controls(spec: dict) -> None:
         st.toggle(
             "전체 섹터 보기",
             key=_key(spec, "sector_show_all"),
-            help="기본은 수익률 상위 12개 섹터만 표시(저장은 전체).",
+            help="기본은 지수 대비 강도 상위 12개 섹터만 표시(저장은 전체).",
         )
     with c_view:
         st.radio(
@@ -2001,7 +2001,7 @@ def _build_sector_metrics_html(summary: pd.DataFrame) -> str:
     rs_fg = "#c8372a" if (avg_rs == avg_rs and avg_rs >= 0) else "#3a6ea5"
     return (
         "<div class='scr-sec-metrics'>"
-        "<div class='scr-sec-metric'><div class='lb'>상승 섹터</div>"
+        "<div class='scr-sec-metric'><div class='lb'>지수 이긴 섹터</div>"
         f"<div class='vl'>{up}<span style='font-size:13px;color:#9ca3af;font-weight:400;'>"
         f" / {total}</span></div></div>"
         "<div class='scr-sec-metric'><div class='lb'>평균 RS(%p)</div>"
@@ -2157,7 +2157,7 @@ def _render_sector_view(
 ) -> None:
     """섹터-우선 화면: 새로고침 때 미리 저장한 스냅샷을 읽어 표시(계산 없음).
 
-    수익률 상위 12개 섹터만 노출(나머지는 저장만). 타일 클릭 → 저장된 종목 즉시 펼침.
+    지수 대비 강도 상위 12개 섹터만 노출(나머지는 저장만). 타일 클릭 → 저장된 종목 즉시 펼침.
     """
     scope = sector_snapshot_scope(index_code)
     snapshot = ui_load_stored_sector_snapshot(scope)
