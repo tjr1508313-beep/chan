@@ -659,6 +659,9 @@ _RANK_DF_COLUMNS = [
     "below_ma5",
 ]
 
+# 섹터 정렬 혼합점수 = 강도 백분위 × w + 폭 백분위 × (1-w). 강도 우선.
+_SECTOR_STRENGTH_WEIGHT = 0.7
+
 _SECTOR_SUMMARY_COLUMNS = [
     "rank",
     "sector",
@@ -818,7 +821,7 @@ def screen_build_sector_rankings(
     metadata: pd.DataFrame | None = None,
     *,
     top_n_per_sector: int = 5,
-    min_sector_size: int = 1,
+    min_sector_size: int = 3,
     unknown_sector: str = "미분류",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """섹터별 강도 요약과 섹터 내부 주도주 랭킹을 만든다.
@@ -829,12 +832,14 @@ def screen_build_sector_rankings(
         metadata: `screen_build_screening_df()` 결과 또는 ticker index 를 가진 메타 DataFrame.
             `sector`, `name_en`, `name_kr`, `market_cap`, `avg_traded_value_20d` 등을 병합한다.
         top_n_per_sector: 섹터 점수 계산에 사용할 섹터 내부 상위 종목 수.
-            `sector_score = 섹터 내부 상위 N개 return_n 평균`.
-        min_sector_size: 이 수보다 종목 수가 적은 섹터는 요약에서 제외.
+            `sector_score = 섹터 내부 상위 N개 rs(지수 대비 초과수익률) 평균`.
+        min_sector_size: 이 수보다 종목 수가 적은 섹터는 요약에서 제외. 기본 3.
         unknown_sector: 섹터 메타가 없을 때 사용할 그룹명.
 
     Returns:
-        `(sector_summary, sector_members)`.
+        `(sector_summary, sector_members)`. 정렬은 강도(sector_score) 백분위와
+        폭(beat_ratio=rs>0 비율) 백분위를 `_SECTOR_STRENGTH_WEIGHT` 가중 혼합한
+        점수 내림차순.
         - `sector_summary`: 섹터별 강도 요약, `sector_score` 내림차순.
         - `sector_members`: 섹터별 종목 랭킹, `rank_in_sector` 포함.
     """
@@ -901,7 +906,7 @@ def screen_build_sector_rankings(
         )
 
     members = members.sort_values(
-        ["sector", "return_n"], ascending=[True, False], kind="mergesort"
+        ["sector", "rs"], ascending=[True, False], kind="mergesort"
     ).copy()
     members["rank_in_sector"] = members.groupby("sector").cumcount() + 1
 
@@ -909,7 +914,7 @@ def screen_build_sector_rankings(
     for sector, group in members.groupby("sector", sort=False):
         if len(group) < int(min_sector_size):
             continue
-        ordered = group.sort_values("return_n", ascending=False, kind="mergesort")
+        ordered = group.sort_values("rs", ascending=False, kind="mergesort")
         leaders = ordered.head(max(int(top_n_per_sector), 1))
         top = ordered.iloc[0]
         summary_rows.append(
@@ -921,7 +926,8 @@ def screen_build_sector_rankings(
                 "avg_return_n": float(group["return_n"].mean()),
                 "median_return_n": float(group["return_n"].median()),
                 "top_return_n": float(top["return_n"]),
-                "sector_score": float(leaders["return_n"].mean()),
+                "sector_score": float(leaders["rs"].mean()),
+                "beat_ratio": float((group["rs"] > 0).mean()),
                 "avg_rs": float(group["rs"].mean()),
                 "median_rs": float(group["rs"].median()),
                 "avg_rs_weighted": (
@@ -944,9 +950,16 @@ def screen_build_sector_rankings(
         )
 
     summary = pd.DataFrame(summary_rows)
+    # 부동소수점 오차로 인한 실질적 동률의 순위 역전을 막기 위해 반올림 후 랭킹.
+    strength_pct = summary["sector_score"].round(9).rank(pct=True, method="average")
+    breadth_pct = summary["beat_ratio"].round(9).rank(pct=True, method="average")
+    summary["sector_rank_score"] = (
+        _SECTOR_STRENGTH_WEIGHT * strength_pct
+        + (1.0 - _SECTOR_STRENGTH_WEIGHT) * breadth_pct
+    )
     summary = summary.sort_values(
-        ["sector_score", "positive_ratio", "stock_count"],
-        ascending=[False, False, False],
+        ["sector_rank_score", "sector_score", "beat_ratio", "stock_count"],
+        ascending=[False, False, False, False],
         kind="mergesort",
     ).reset_index(drop=True)
     summary.insert(0, "rank", range(1, len(summary) + 1))
