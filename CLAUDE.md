@@ -30,7 +30,9 @@
 
 ## 섹터 분석 방향
 - 목적: 주도섹터 안의 주도주를 찾기 위해 기존 RS 랭킹을 섹터 단위로 재집계
-- 백엔드 기준: `sector_score = 섹터 내부 상위 N개 종목 return_n 평균`
+- 백엔드 기준: 강도 = 섹터 내부 `rs`(지수 대비) 상위 5종목 평균 / 폭 = `rs>0`(지수 이긴) 비율
+- 섹터 정렬 = `0.7×강도_백분위 + 0.3×폭_백분위`(순위-백분위라 하락장에서도 순위 유지). 표시 숫자 = 지수 대비 강도(%p)
+- 3종목 미만 섹터는 제외(`min_sector_size=3`)
 - 함께 보는 지표: 섹터 종목 수, 양수 수익률 비율, 평균/중앙 RS, 섹터 1등 종목
 - 섹터 메타가 없으면 `미분류`로 묶어 계산 흐름을 유지
 - 미국은 yfinance sector 메타 활용
@@ -42,15 +44,15 @@
 - Streamlit 화면은 각 자산군마다 상단 토글로 **`섹터별 보기`(기본) ↔ `전체 RS 보기`** 전환
   - 섹터별 보기 = 섹터-우선 주력 화면(스탁이지 "오늘의 업종" 스타일): 요약 지표카드 + **섹터 그리드(타일)**
     - 타일 = 강도 색(빨강 강세/파랑 약세). **타일 자체가 클릭 버튼** → 그 줄 아래로 섹터 종목이 펼쳐짐(별도 버튼 없음, 한 번에 하나)
-    - **수익률(20일) 상위 12개 섹터만 표시**(보기방식 라디오 옆 `전체 섹터 보기` 토글로 전체 노출). 펼침 → 그 섹터 종목 중 **코스피 20일 수익률 −5%p 이상(종목 절대수익률 기준, KR은 KOSPI=KS11 벤치마크) + 상위 10개**만 → 종목 클릭 시 5MA·9ATR 차트
+    - **지수 대비 강도 상위 12개 섹터만 표시**(보기방식 라디오 옆 `전체 섹터 보기` 토글로 전체 노출). 펼침 → 그 섹터 종목 중 **코스피 20일 수익률 −5%p 이상(종목 절대수익률 기준, KR은 KOSPI=KS11 벤치마크) + 상위 10개**만 → 종목 클릭 시 5MA·9ATR 차트
       - ⚠️ 멤버 필터는 `rs`(각 시장 지수 대비)가 아니라 **절대수익률 vs 단일 코스피 벤치마크**로 한다. KQ11 지수가 망가지면 rs가 부풀려져 필터를 우회하기 때문(2026-06-24 코스닥 −23% 이상치 사례).
-  - 섹터 정렬 = `sector_score`(섹터 내부 상위 5종목 **20일 raw 수익률** 평균 → 지수 무관), 보조로 양수비율(breadth)
+  - 섹터 정렬 = `0.7×강도_백분위 + 0.3×폭_백분위`. 강도 = 상위 5종목 `rs`(지수 대비) 평균, 폭 = `rs>0`(지수 이긴) 비율. 순위-백분위라 상승/하락장 모두 순위 일관.
   - **★ precompute & store (화면은 읽기만)**: 무거운 섹터 계산은 **새로고침 때 1회** 수행해 `sector_snapshot` 테이블에 저장(요약+멤버 전체). 화면은 `cache_load_sector_snapshot`로 **읽기만**(~0.01s). 계산 기준 고정(RS 20일, 거래대금 느슨 필터). 미저장 시 안내 + "지금 계산" 폴백 버튼.
     - 저장: `cache_save_sector_snapshot`/`cache_load_sector_snapshot`(`cache.py`). 굽기: `sector.screen_rebuild_sector_snapshot(market)` → 새로고침 경로 `refresh_cache.py`(`_refresh_us`/`_refresh_kr`) + 로컬 `_refresh_worker`에서 호출
-    - scope: KR(코스피+코스닥 합산) / US_^IXIC / US_^GSPC
+    - scope: KR(코스피 KS11 단독) / US_^IXIC / US_^GSPC
   - **섹터용 느슨 필터**(저장 시 고정): KR 거래대금 100억↑·시총 3,000억↑ / US 거래대금 $10M↑·시총 $300M↑, 위험종목·우선주/ETF/스팩 제외 유지. 전체 RS 보기의 강한 필터와 별개.
     - **초저시총 급등주 왜곡 컷**: `exclude_caution=True`로 투자경고·투자주의·투자주의환기·단기과열 배지(`caution_flags` 비어있지 않음) 종목도 섹터 계산에서 제외. is_risk(관리/매매정지/정리매매)와 별개의 옵션 필터(`core.screen_apply_filters`, 기본 False). 시총 하한 부활과 함께 비금속 +136.95%(서산 등 초저시총 급등) 왜곡을 차단. ⚠️ 값 변경 후에는 **새로고침으로 sector_snapshot 재계산**해야 반영됨.
-  - **한국은 코스피+코스닥 합산**: KS11+KQ11을 합쳐 섹터 재집계(예: 반도체 코스피4+코스닥17=21종목). 각 종목 RS는 자기 시장 지수 대비로 정확(`screen_build_combined_sector_snapshot`). 미국은 단일 지수.
+  - **한국 섹터는 코스피(KS11) 단독 계산**: 코스닥(KQ11)은 이번엔 제외(추후 별도 화면 + 합산 재논의). 벤치마크가 KS11 하나라 KQ11 이상치 왜곡 없음. rs가 곧 KS11 대비 초과수익. `screen_build_combined_sector_snapshot`는 코드에 남아있으나 현재 KR 굽기 경로에서 미사용. 미국은 단일 지수.
   - 구현: `screening/sector.py`(`_build_index_ranked`/`screen_build_combined_sector_snapshot`/`screen_rebuild_sector_snapshot`/`sector_snapshot_scope`), `screening/ui.py`(`_render_sector_view`/`_render_sector_detail`/`_render_sector_member_rows`/`_build_sector_tiles_css`/`_select_sector`/`ui_load_stored_sector_snapshot`), 색조 `_sector_tint`, CSS `theme.py` `_SECTOR_CSS`
 - UI 밖에서도 `screening.sector.screen_build_sector_snapshot()` 또는
   `py scripts/show_sector_rs.py --index-code KS11 --period 20` 로 섹터 요약과 섹터 내부 주도주를 확인 가능
