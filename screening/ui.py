@@ -1930,7 +1930,7 @@ def _format_sector_members(spec: dict, members: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-_SECTOR_TINT_SCALE = 0.18  # 이 수익률(=18%)에서 색 강도 최대
+_SECTOR_TINT_SCALE = 0.08  # 이 지수 대비 강도(rs %p, =8%p)에서 색 강도 최대 (라이브 데이터로 미세조정 여지)
 _SECTOR_BENCH_GAP = 0.05  # 코스피 기준 -5%p 미만 종목은 섹터 펼침에서 제외
 
 
