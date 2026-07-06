@@ -174,7 +174,7 @@ def ui_load_sector_snapshot(
     filter_config: dict,
     tickers_tuple: tuple[str, ...],
     top_n_per_sector: int = 5,
-    min_sector_size: int = 1,
+    min_sector_size: int = 3,
 ) -> dict:
     return screen_build_sector_snapshot(
         index_code=index_code,
@@ -199,7 +199,7 @@ def ui_load_combined_sector_snapshot(
     filter_config_items: tuple,
     market_tickers: tuple,
     top_n_per_sector: int = 5,
-    min_sector_size: int = 1,
+    min_sector_size: int = 3,
 ) -> dict:
     """코스피+코스닥 합산 섹터 스냅샷 (시장별 RS 정확). 캐시 키용으로 인자는 hashable로 받음."""
     filter_config = dict(filter_config_items)

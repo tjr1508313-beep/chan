@@ -268,7 +268,7 @@ def screen_build_sector_snapshot(
     index_code,
     period=20,
     top_n_per_sector=5,
-    min_sector_size=1,
+    min_sector_size=3,
     tickers=None,
     max_lag_days=0,
     filter_config=None,
@@ -314,7 +314,7 @@ def screen_build_combined_sector_snapshot(
     index_codes,
     period=20,
     top_n_per_sector=5,
-    min_sector_size=1,
+    min_sector_size=3,
     tickers_map=None,
     filter_config=None,
     max_tickers=None,
@@ -406,7 +406,7 @@ def sector_snapshot_scope(index_code: str) -> str:
 def screen_rebuild_sector_snapshot(
     market: str,
     period: int = SECTOR_SNAPSHOT_PERIOD,
-    min_sector_size: int = 2,
+    min_sector_size: int = 3,
 ) -> dict:
     """새로고침 때 호출: 섹터 스냅샷(요약+멤버 전체)을 계산해 DB에 저장.
 
