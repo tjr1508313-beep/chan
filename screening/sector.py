@@ -410,7 +410,7 @@ def screen_rebuild_sector_snapshot(
 ) -> dict:
     """새로고침 때 호출: 섹터 스냅샷(요약+멤버 전체)을 계산해 DB에 저장.
 
-    market="kr" → 코스피+코스닥 합산 1개(scope 'KR').
+    market="kr" → 코스피(KS11) 단독 1개(scope 'KR'). 코스닥은 제외(추후 별도).
     market="us" → 나스닥/S&P500 각각(scope 'US_^IXIC'/'US_^GSPC').
     """
     saved: dict[str, int] = {}
