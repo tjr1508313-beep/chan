@@ -74,6 +74,11 @@ html, body, .stApp {{
    먹어 상단에 ~64px 여백을 만들므로 컨테이너째 제거(스타일은 숨겨도 전역 적용 유지). */
 [data-testid="stElementContainer"]:has(style),
 [data-testid="stElementContainer"]:has(> iframe[title="st.iframe"]) {{ display: none !important; }}
+/* 지수 차트 iframe 높이 고정: 컴포넌트의 setFrameHeight 신호가 늦게 도착해
+   첫 로드 시 iframe이 과대 높이로 잡혀 코스피 카드 아래 갭이 생기는 레이스 방지
+   (리사이즈하면 사라지던 증상). 값은 _render_market_index_chart 의
+   ChartOptions(height=190)과 일치시킬 것. */
+[class*="st-key-idxchart_"] iframe {{ height: 190px !important; }}
 h1, h2, h3, h4, h5, h6 {{ color: {COLOR_TEXT} !important; letter-spacing: -0.02em; font-weight: 800; }}
 p, span, label, div {{ color: {COLOR_TEXT}; }}
 .stCaption, [data-testid="stCaptionContainer"] {{ color: {COLOR_MUTED} !important; }}

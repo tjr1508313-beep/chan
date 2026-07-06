@@ -633,7 +633,10 @@ def _render_market_index_chart(spec: dict, index_code: str) -> None:
     )
     chart_key = _make_index_chart_key(spec["code"], index_code)
     _apply_chart_stability(chart, f"stable-{chart_key}")
-    chart.render(key=chart_key)
+    # 키드 컨테이너로 감싸 CSS(st-key-idxchart_*)가 이 차트 iframe 높이를 190px로
+    # 고정 → 컴포넌트 높이 신호 지연에 따른 첫 로드 갭(리사이즈 시 사라지던) 방지.
+    with st.container(key=f"idxchart_{spec['code']}"):
+        chart.render(key=chart_key)
     st.caption(
         f"최근 {len(df)}일 완성 봉 · 마지막 봉 {df.index[-1].strftime('%Y-%m-%d')}"
     )
