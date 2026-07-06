@@ -323,7 +323,7 @@ def screen_build_combined_sector_snapshot(
     """여러 지수(예: 코스피+코스닥)를 합쳐 섹터를 재집계.
 
     각 지수는 자기 지수 대비 RS로 ranked를 만든 뒤(시장별 정확) ranked/metadata를 합쳐
-    한 번에 섹터 랭킹을 구성한다. sector_score는 raw 수익률 기반이라 시장 통합에 영향 없음.
+    한 번에 섹터 랭킹을 구성한다. 각 종목 rs는 이미 자기 시장 지수 대비라 시장 통합에 영향 없음.
     """
     codes = [_normalize_index_code(c) for c in index_codes]
     ranked_frames: list[pd.DataFrame] = []
@@ -415,14 +415,14 @@ def screen_rebuild_sector_snapshot(
     """
     saved: dict[str, int] = {}
     if str(market).lower() == "kr":
+        # 코스피(KS11) 단독으로 섹터 계산. 코스닥은 이번엔 제외(추후 별도).
         ks = cache_load_universe("KS11") or []
-        kq = cache_load_universe("KQ11") or []
-        snap = screen_build_combined_sector_snapshot(
-            ["KS11", "KQ11"],
+        snap = screen_build_sector_snapshot(
+            "KS11",
             period=period,
             top_n_per_sector=5,
             min_sector_size=min_sector_size,
-            tickers_map={"KS11": ks, "KQ11": kq},
+            tickers=ks,
             filter_config=dict(_KR_SECTOR_FILTER),
         )
         cache_save_sector_snapshot(

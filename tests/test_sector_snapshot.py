@@ -2,6 +2,8 @@ import importlib
 
 import pandas as pd
 
+import screening.sector as sector
+
 
 def _sector_module():
     return importlib.import_module("screening.sector")
@@ -312,3 +314,42 @@ def test_cache_sector_snapshot_round_trip_preserves_leading_zeros(tmp_path, monk
     assert str(loaded["sector_members"].iloc[0]["ticker"]) == "005930"
     assert str(loaded["sector_summary"].iloc[0]["top_ticker"]) == "005930"
     assert cache.cache_load_sector_snapshot("NOPE") is None
+
+
+def test_rebuild_kr_uses_kospi_only(monkeypatch):
+    single_calls = []
+    combined_calls = []
+
+    def fake_single(index_code, **kwargs):
+        single_calls.append((index_code, kwargs))
+        return {
+            "sector_summary": pd.DataFrame([{"sector": "반도체"}]),
+            "sector_members": pd.DataFrame([{"sector": "반도체", "ticker": "005930"}]),
+        }
+
+    def fake_combined(index_codes, **kwargs):
+        combined_calls.append((index_codes, kwargs))
+        return {"sector_summary": pd.DataFrame(), "sector_members": pd.DataFrame()}
+
+    saved = {}
+
+    def fake_save(scope, period, summary_df, members_df):
+        saved["scope"] = scope
+        return True
+
+    monkeypatch.setattr(sector, "screen_build_sector_snapshot", fake_single, raising=False)
+    monkeypatch.setattr(
+        sector, "screen_build_combined_sector_snapshot", fake_combined, raising=False
+    )
+    monkeypatch.setattr(sector, "cache_save_sector_snapshot", fake_save, raising=False)
+    monkeypatch.setattr(
+        sector, "cache_load_universe", lambda code: ["005930"], raising=False
+    )
+
+    result = sector.screen_rebuild_sector_snapshot("kr")
+
+    assert combined_calls == []
+    assert len(single_calls) == 1
+    assert single_calls[0][0] == "KS11"
+    assert saved["scope"] == sector._KR_SECTOR_SCOPE
+    assert result[sector._KR_SECTOR_SCOPE] == 1
