@@ -49,10 +49,12 @@
   - 섹터 정렬 = `0.7×강도_백분위 + 0.3×폭_백분위`. 강도 = 상위 5종목 `rs`(지수 대비) 평균, 폭 = `rs>0`(지수 이긴) 비율. 순위-백분위라 상승/하락장 모두 순위 일관.
   - **★ precompute & store (화면은 읽기만)**: 무거운 섹터 계산은 **새로고침 때 1회** 수행해 `sector_snapshot` 테이블에 저장(요약+멤버 전체). 화면은 `cache_load_sector_snapshot`로 **읽기만**(~0.01s). 계산 기준 고정(RS 20일, 거래대금 느슨 필터). 미저장 시 안내 + "지금 계산" 폴백 버튼.
     - 저장: `cache_save_sector_snapshot`/`cache_load_sector_snapshot`(`cache.py`). 굽기: `sector.screen_rebuild_sector_snapshot(market)` → 새로고침 경로 `refresh_cache.py`(`_refresh_us`/`_refresh_kr`) + 로컬 `_refresh_worker`에서 호출
-    - scope: KR(코스피 KS11 단독) / US_^IXIC / US_^GSPC
+    - scope: KR(코스피+코스닥 합산, 벤치마크 KS11) / US_^IXIC / US_^GSPC
   - **섹터용 느슨 필터**(저장 시 고정): KR 거래대금 100억↑·시총 3,000억↑ / US 거래대금 $10M↑·시총 $300M↑, 위험종목·우선주/ETF/스팩 제외 유지. 전체 RS 보기의 강한 필터와 별개.
     - **초저시총 급등주 왜곡 컷**: `exclude_caution=True`로 투자경고·투자주의·투자주의환기·단기과열 배지(`caution_flags` 비어있지 않음) 종목도 섹터 계산에서 제외. is_risk(관리/매매정지/정리매매)와 별개의 옵션 필터(`core.screen_apply_filters`, 기본 False). 시총 하한 부활과 함께 비금속 +136.95%(서산 등 초저시총 급등) 왜곡을 차단. ⚠️ 값 변경 후에는 **새로고침으로 sector_snapshot 재계산**해야 반영됨.
-  - **한국 섹터는 코스피(KS11) 단독 계산**: 코스닥(KQ11)은 이번엔 제외(추후 별도 화면 + 합산 재논의). 벤치마크가 KS11 하나라 KQ11 이상치 왜곡 없음. rs가 곧 KS11 대비 초과수익. `screen_build_combined_sector_snapshot`는 코드에 남아있으나 현재 KR 굽기 경로에서 미사용. 미국은 단일 지수.
+  - **한국 섹터는 코스피+코스닥 합산 계산(벤치마크는 KS11 단독)**: 모집단은 KS11+KQ11 종목을 합치되, 각 종목 rs는 **전부 KS11 대비**로 계산 → KQ11 지수를 벤치마크로 안 써서 이상치 왜곡 없음(단일 잣대). 코스닥 소부장 포함으로 반도체 등 그림이 완전해짐. rs가 곧 KS11 대비 초과수익. 미국은 단일 지수.
+    - **되돌림 스위치** `sector.py`의 `_KR_SECTOR_INCLUDE_KOSDAQ`(기본 True). `False`로 바꾸고 **새로고침(sector_snapshot 재계산)** 하면 코스피(KS11) 단독으로 즉시 복귀. 코스피 단독 라이브 상태는 git tag `sector-kospi-only`로도 박제됨.
+    - ⚠️ 단일 KS11 벤치마크라 코스닥 강세장에선 코스닥 종목이 rs 상위를 많이 차지할 수 있음(의도된 동작 — 실제로 지수를 이기면 리더로 인정). `screen_build_combined_sector_snapshot`(시장별 rs)는 코드에 남아있으나 KR 굽기 경로에서 미사용.
   - 구현: `screening/sector.py`(`_build_index_ranked`/`screen_build_combined_sector_snapshot`/`screen_rebuild_sector_snapshot`/`sector_snapshot_scope`), `screening/ui.py`(`_render_sector_view`/`_render_sector_detail`/`_render_sector_member_rows`/`_build_sector_tiles_css`/`_select_sector`/`ui_load_stored_sector_snapshot`), 색조 `_sector_tint`, CSS `theme.py` `_SECTOR_CSS`
 - UI 밖에서도 `screening.sector.screen_build_sector_snapshot()` 또는
   `py scripts/show_sector_rs.py --index-code KS11 --period 20` 로 섹터 요약과 섹터 내부 주도주를 확인 가능

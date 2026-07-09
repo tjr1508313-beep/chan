@@ -316,7 +316,12 @@ def test_cache_sector_snapshot_round_trip_preserves_leading_zeros(tmp_path, monk
     assert cache.cache_load_sector_snapshot("NOPE") is None
 
 
-def test_rebuild_kr_uses_kospi_only(monkeypatch):
+def _patch_rebuild_kr(monkeypatch):
+    """KR 리빌드 경로를 mock으로 감싸고 (single_calls, combined_calls) 를 돌려준다.
+
+    cache_load_universe 는 시장별로 다른 티커를 반환 → 모집단 구성 검증 가능.
+    KS11 → ["005930"](코스피), KQ11 → ["247540"](코스닥).
+    """
     single_calls = []
     combined_calls = []
 
@@ -331,25 +336,42 @@ def test_rebuild_kr_uses_kospi_only(monkeypatch):
         combined_calls.append((index_codes, kwargs))
         return {"sector_summary": pd.DataFrame(), "sector_members": pd.DataFrame()}
 
-    saved = {}
-
-    def fake_save(scope, period, summary_df, members_df):
-        saved["scope"] = scope
-        return True
-
+    universe = {"KS11": ["005930"], "KQ11": ["247540"]}
     monkeypatch.setattr(sector, "screen_build_sector_snapshot", fake_single, raising=False)
     monkeypatch.setattr(
         sector, "screen_build_combined_sector_snapshot", fake_combined, raising=False
     )
-    monkeypatch.setattr(sector, "cache_save_sector_snapshot", fake_save, raising=False)
     monkeypatch.setattr(
-        sector, "cache_load_universe", lambda code: ["005930"], raising=False
+        sector, "cache_save_sector_snapshot", lambda *a, **k: True, raising=False
     )
+    monkeypatch.setattr(
+        sector, "cache_load_universe", lambda code: list(universe.get(code, [])),
+        raising=False,
+    )
+    return single_calls, combined_calls
+
+
+def test_rebuild_kr_benchmark_is_ks11_and_includes_kosdaq(monkeypatch):
+    # 기본(합산): 벤치마크는 KS11 단독, 모집단은 코스피+코스닥.
+    monkeypatch.setattr(sector, "_KR_SECTOR_INCLUDE_KOSDAQ", True, raising=False)
+    single_calls, combined_calls = _patch_rebuild_kr(monkeypatch)
 
     result = sector.screen_rebuild_sector_snapshot("kr")
 
-    assert combined_calls == []
+    assert combined_calls == []              # KQ11 지수를 벤치마크로 쓰지 않음
     assert len(single_calls) == 1
-    assert single_calls[0][0] == "KS11"
-    assert saved["scope"] == sector._KR_SECTOR_SCOPE
+    assert single_calls[0][0] == "KS11"      # 벤치마크 = 코스피 단독
+    assert single_calls[0][1]["tickers"] == ["005930", "247540"]  # 코스피+코스닥 모집단
     assert result[sector._KR_SECTOR_SCOPE] == 1
+
+
+def test_rebuild_kr_kospi_only_when_flag_off(monkeypatch):
+    # 되돌림 스위치: 코스닥 제외 시 모집단은 코스피 단독.
+    monkeypatch.setattr(sector, "_KR_SECTOR_INCLUDE_KOSDAQ", False, raising=False)
+    single_calls, combined_calls = _patch_rebuild_kr(monkeypatch)
+
+    sector.screen_rebuild_sector_snapshot("kr")
+
+    assert combined_calls == []
+    assert single_calls[0][0] == "KS11"
+    assert single_calls[0][1]["tickers"] == ["005930"]  # 코스닥 미포함

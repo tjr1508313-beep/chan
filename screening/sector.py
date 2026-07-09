@@ -396,6 +396,14 @@ _US_SECTOR_FILTER = {
 
 _KR_SECTOR_SCOPE = "KR"
 
+# KR 섹터 모집단 선택 (여차하면 되돌리는 스위치):
+#   True  = 코스피+코스닥 합산, 벤치마크는 KS11 단독(코스닥 종목도 KS11 대비 rs).
+#           반도체 등 코스닥 소부장이 포함돼 더 완전한 그림. KQ11은 안 써서 왜곡 없음.
+#   False = 코스피(KS11) 단독. 코스닥 제외.
+# 되돌리려면 이 값을 False 로 바꾸고 새로고침(sector_snapshot 재계산)하면 됨.
+# 코스피 단독 상태는 git tag `sector-kospi-only` 로도 박제돼 있음.
+_KR_SECTOR_INCLUDE_KOSDAQ = True
+
 
 def sector_snapshot_scope(index_code: str) -> str:
     """지수 코드 → 저장 scope. 한국은 코스피+코스닥 합산이라 단일 'KR'."""
@@ -415,14 +423,17 @@ def screen_rebuild_sector_snapshot(
     """
     saved: dict[str, int] = {}
     if str(market).lower() == "kr":
-        # 코스피(KS11) 단독으로 섹터 계산. 코스닥은 이번엔 제외(추후 별도).
-        ks = cache_load_universe("KS11") or []
+        # 벤치마크는 항상 KS11 단독(코스닥 종목 rs도 KS11 대비 → KQ11 이상치 왜곡 차단).
+        # 모집단만 _KR_SECTOR_INCLUDE_KOSDAQ 스위치로 코스피 단독 ↔ 코스피+코스닥 전환.
+        tickers = list(cache_load_universe("KS11") or [])
+        if _KR_SECTOR_INCLUDE_KOSDAQ:
+            tickers += list(cache_load_universe("KQ11") or [])
         snap = screen_build_sector_snapshot(
             "KS11",
             period=period,
             top_n_per_sector=5,
             min_sector_size=min_sector_size,
-            tickers=ks,
+            tickers=tickers,
             filter_config=dict(_KR_SECTOR_FILTER),
         )
         cache_save_sector_snapshot(
