@@ -79,6 +79,9 @@ html, body, .stApp {{
    (리사이즈하면 사라지던 증상). 값은 _render_market_index_chart 의
    ChartOptions(height=190)과 일치시킬 것. */
 [class*="st-key-idxchart_"] iframe {{ height: 190px !important; }}
+/* number/text 입력의 "Press Enter to apply" 힌트 숨김 — 값은 [적용] 클릭(blur)
+   또는 Enter로 커밋되므로 힌트는 불필요하고 [적용] 버튼과 혼동만 준다. */
+[data-testid="InputInstructions"], [data-testid="stWidgetInstructions"] {{ display: none !important; }}
 h1, h2, h3, h4, h5, h6 {{ color: {COLOR_TEXT} !important; letter-spacing: -0.02em; font-weight: 800; }}
 p, span, label, div {{ color: {COLOR_TEXT}; }}
 .stCaption, [data-testid="stCaptionContainer"] {{ color: {COLOR_MUTED} !important; }}

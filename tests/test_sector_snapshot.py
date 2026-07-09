@@ -375,3 +375,29 @@ def test_rebuild_kr_kospi_only_when_flag_off(monkeypatch):
     assert combined_calls == []
     assert single_calls[0][0] == "KS11"
     assert single_calls[0][1]["tickers"] == ["005930"]  # 코스닥 미포함
+
+
+def test_scope_snapshot_kr_uses_ks11_benchmark_and_period(monkeypatch):
+    # 즉석 계산(UI)·굽기 공용 코어: KR scope → KS11 벤치마크, 요청 period 전달.
+    monkeypatch.setattr(sector, "_KR_SECTOR_INCLUDE_KOSDAQ", True, raising=False)
+    single_calls, _ = _patch_rebuild_kr(monkeypatch)
+
+    sector.screen_build_scope_sector_snapshot(sector._KR_SECTOR_SCOPE, period=40)
+
+    assert single_calls[0][0] == "KS11"
+    assert single_calls[0][1]["period"] == 40
+    assert single_calls[0][1]["tickers"] == ["005930", "247540"]
+
+
+def test_scope_snapshot_us_uses_single_index(monkeypatch):
+    # US scope → 해당 단일 지수(^IXIC)로 계산, 유니버스도 그 지수 것.
+    single_calls, _ = _patch_rebuild_kr(monkeypatch)
+    monkeypatch.setattr(
+        sector, "cache_load_universe",
+        lambda code: {"^IXIC": ["AAPL", "MSFT"]}.get(code, []), raising=False,
+    )
+
+    sector.screen_build_scope_sector_snapshot("US_^IXIC", period=20)
+
+    assert single_calls[0][0] == "^IXIC"
+    assert single_calls[0][1]["tickers"] == ["AAPL", "MSFT"]

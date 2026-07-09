@@ -69,7 +69,9 @@ from .data import us_get_nasdaq_tickers, us_get_sp500_tickers
 from .data_kr import kr_get_kosdaq_tickers, kr_get_kospi_tickers
 from .drive_upload import drive_upload_configured, upload_watchlist_to_drive
 from .sector import (
+    SECTOR_SNAPSHOT_PERIOD,
     screen_build_combined_sector_snapshot,
+    screen_build_scope_sector_snapshot,
     screen_build_sector_snapshot,
     screen_rebuild_sector_snapshot,
     screen_select_sector_members,
@@ -191,6 +193,20 @@ def ui_load_sector_snapshot(
 def ui_load_stored_sector_snapshot(scope: str) -> dict | None:
     """새로고침 때 미리 저장된 섹터 스냅샷을 DB에서 읽기만 한다 (계산 없음)."""
     return cache_load_sector_snapshot(scope)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def ui_load_sector_snapshot_live(scope: str, period: int) -> dict:
+    """기본(20일)이 아닌 기간을 골랐을 때 섹터 스냅샷을 즉석 계산 (기간별 수익률이
+    캐시돼 있어 ~1s). 굽기와 동일한 `screen_build_scope_sector_snapshot` 코어 사용."""
+    snap = screen_build_scope_sector_snapshot(scope, period=int(period))
+    return {
+        "scope": scope,
+        "period": int(period),
+        "sector_summary": snap["sector_summary"],
+        "sector_members": snap["sector_members"],
+        "updated_at": None,
+    }
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1181,13 +1197,30 @@ def _refresh_progress_fragment(spec: dict) -> None:
 
 # ─── 헤더/배지/필터 요약 ───────────────────────────────────────────
 
+def _apply_inline_settings(spec: dict) -> None:
+    """[적용] 콜백: 기간/표시 draft 값을 활성값으로 반영.
+
+    활성값(rs_period/top_n)은 섹터·전체 RS 뷰가 읽어 재계산한다. draft 로 담았다가
+    한 번에 반영해 매 스텝 클릭마다 무거운(특히 비-20일 섹터 즉석) 재계산을 막는다.
+    """
+    for src, dst in (("rs_period_draft", "rs_period"), ("top_n_draft", "top_n")):
+        sk = _key(spec, src)
+        if sk in st.session_state:
+            st.session_state[_key(spec, dst)] = int(st.session_state[sk])
+
+
 def _render_rs_header(
     spec: dict, index_code: str, index_display: str, rs_period: int, top_n: int
 ) -> None:
-    # 기간/종가 상세는 상단 시장 카드로 병합됨. 한 줄: 지수·기간·표시 + 필터 설정(옆).
+    # 한 줄: 지수 · 기간 · 표시 · 필터 설정(축소) · 적용.
     index_options = spec["indices"]
+    # 기간/표시는 draft에 담고 [적용] 눌러야 활성값 반영.
+    st.session_state.setdefault(_key(spec, "rs_period_draft"), int(rs_period))
+    st.session_state.setdefault(_key(spec, "top_n_draft"), int(top_n))
 
-    c1, c2, c3, c_filter = st.columns([1.1, 0.8, 0.8, 3.0], gap="small")
+    c1, c2, c3, c_filter, c_apply = st.columns(
+        [1.2, 0.8, 0.8, 1.7, 0.75], gap="small"
+    )
     with c1:
         st.selectbox(
             "지수",
@@ -1198,24 +1231,37 @@ def _render_rs_header(
         st.number_input(
             "기간(일)",
             min_value=5, max_value=60,
-            value=20,
             step=1,
-            key=_key(spec, "rs_period"),
-            help="RS = 종목 N일 수익률 - 지수 N일 수익률",
+            key=_key(spec, "rs_period_draft"),
+            help="RS = 종목 N일 수익률 − 지수 N일 수익률. [적용] 눌러야 반영(섹터·RS 모두).",
         )
     with c3:
         st.number_input(
             "표시(개)",
             min_value=10, max_value=50,
-            value=20,
             step=5,
-            key=_key(spec, "top_n"),
-            help="랭킹 테이블에 표시할 상위 종목 수 (전체 RS 보기)",
+            key=_key(spec, "top_n_draft"),
+            help="전체 RS 보기 랭킹 표시 개수. [적용] 눌러야 반영.",
         )
     with c_filter:
         # 입력 라벨 높이만큼 내려 컨트롤과 세로 정렬
         st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
         _render_filter_expander(spec)
+    with c_apply:
+        pending = (
+            int(st.session_state.get(_key(spec, "rs_period_draft"), rs_period)) != int(rs_period)
+            or int(st.session_state.get(_key(spec, "top_n_draft"), top_n)) != int(top_n)
+        )
+        st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
+        st.button(
+            "적용",
+            key=_key(spec, "apply_settings"),
+            type="primary" if pending else "secondary",
+            use_container_width=True,
+            on_click=_apply_inline_settings,
+            args=(spec,),
+            help="기간·표시 변경을 반영",
+        )
 
 
 def _render_pipeline_badge(stats: dict, ranked_len: int) -> None:
@@ -2158,12 +2204,18 @@ def _render_sector_view(
     filter_config: dict,
     tickers: list[str],
 ) -> None:
-    """섹터-우선 화면: 새로고침 때 미리 저장한 스냅샷을 읽어 표시(계산 없음).
+    """섹터-우선 화면: 기간=20일이면 미리 저장한 스냅샷을 읽고(계산 없음),
+    그 외 기간이면 즉석 계산(~1s, 캐시)한다.
 
     지수 대비 강도 상위 12개 섹터만 노출(나머지는 저장만). 타일 클릭 → 저장된 종목 즉시 펼침.
     """
     scope = sector_snapshot_scope(index_code)
-    snapshot = ui_load_stored_sector_snapshot(scope)
+    if int(rs_period) == SECTOR_SNAPSHOT_PERIOD:
+        snapshot = ui_load_stored_sector_snapshot(scope)
+    else:
+        # 기본 기간이 아니면 즉석 계산(저장 안 함). 기간별 수익률 캐시로 ~1s.
+        with st.spinner(f"{rs_period}일 기준 섹터 강도 계산 중…"):
+            snapshot = ui_load_sector_snapshot_live(scope, int(rs_period))
     summary = snapshot.get("sector_summary") if snapshot else None
 
     if summary is None or summary.empty:

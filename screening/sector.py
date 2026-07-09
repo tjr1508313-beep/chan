@@ -411,6 +411,35 @@ def sector_snapshot_scope(index_code: str) -> str:
     return _KR_SECTOR_SCOPE if _is_kr_index(code) else f"US_{code}"
 
 
+def screen_build_scope_sector_snapshot(
+    scope: str,
+    period: int = SECTOR_SNAPSHOT_PERIOD,
+    min_sector_size: int = 3,
+) -> dict:
+    """scope별 섹터 스냅샷을 계산(저장 안 함). 굽기(rebuild)·즉석 계산(UI) 공용 코어.
+
+    scope="KR"       → 코스피(+코스닥, `_KR_SECTOR_INCLUDE_KOSDAQ` 스위치) 모집단,
+                        벤치마크는 KS11 단독(코스닥 종목 rs도 KS11 대비 → KQ11 왜곡 차단).
+    scope="US_^IXIC" → 나스닥 단일 지수. scope="US_^GSPC" → S&P500 단일 지수.
+    """
+    if scope == _KR_SECTOR_SCOPE:
+        tickers = list(cache_load_universe("KS11") or [])
+        if _KR_SECTOR_INCLUDE_KOSDAQ:
+            tickers += list(cache_load_universe("KQ11") or [])
+        return screen_build_sector_snapshot(
+            "KS11", period=period, top_n_per_sector=5,
+            min_sector_size=min_sector_size, tickers=tickers,
+            filter_config=dict(_KR_SECTOR_FILTER),
+        )
+    code = scope[3:] if scope.startswith("US_") else scope
+    tickers = cache_load_universe(code) or []
+    return screen_build_sector_snapshot(
+        code, period=period, top_n_per_sector=5,
+        min_sector_size=min_sector_size, tickers=tickers,
+        filter_config=dict(_US_SECTOR_FILTER),
+    )
+
+
 def screen_rebuild_sector_snapshot(
     market: str,
     period: int = SECTOR_SNAPSHOT_PERIOD,
@@ -418,42 +447,21 @@ def screen_rebuild_sector_snapshot(
 ) -> dict:
     """새로고침 때 호출: 섹터 스냅샷(요약+멤버 전체)을 계산해 DB에 저장.
 
-    market="kr" → 코스피(KS11) 단독 1개(scope 'KR'). 코스닥은 제외(추후 별도).
+    market="kr" → 코스피+코스닥 합산(벤치마크 KS11), scope 'KR' 1개.
     market="us" → 나스닥/S&P500 각각(scope 'US_^IXIC'/'US_^GSPC').
     """
-    saved: dict[str, int] = {}
     if str(market).lower() == "kr":
-        # 벤치마크는 항상 KS11 단독(코스닥 종목 rs도 KS11 대비 → KQ11 이상치 왜곡 차단).
-        # 모집단만 _KR_SECTOR_INCLUDE_KOSDAQ 스위치로 코스피 단독 ↔ 코스피+코스닥 전환.
-        tickers = list(cache_load_universe("KS11") or [])
-        if _KR_SECTOR_INCLUDE_KOSDAQ:
-            tickers += list(cache_load_universe("KQ11") or [])
-        snap = screen_build_sector_snapshot(
-            "KS11",
-            period=period,
-            top_n_per_sector=5,
-            min_sector_size=min_sector_size,
-            tickers=tickers,
-            filter_config=dict(_KR_SECTOR_FILTER),
+        scopes = [_KR_SECTOR_SCOPE]
+    else:
+        scopes = [f"US_{c}" for c in ("^IXIC", "^GSPC")]
+
+    saved: dict[str, int] = {}
+    for scope in scopes:
+        snap = screen_build_scope_sector_snapshot(
+            scope, period=period, min_sector_size=min_sector_size
         )
         cache_save_sector_snapshot(
-            _KR_SECTOR_SCOPE, period, snap["sector_summary"], snap["sector_members"]
+            scope, period, snap["sector_summary"], snap["sector_members"]
         )
-        saved[_KR_SECTOR_SCOPE] = int(len(snap["sector_summary"]))
-    else:
-        for code in ("^IXIC", "^GSPC"):
-            tickers = cache_load_universe(code) or []
-            snap = screen_build_sector_snapshot(
-                code,
-                period=period,
-                top_n_per_sector=5,
-                min_sector_size=min_sector_size,
-                tickers=tickers,
-                filter_config=dict(_US_SECTOR_FILTER),
-            )
-            scope = f"US_{code}"
-            cache_save_sector_snapshot(
-                scope, period, snap["sector_summary"], snap["sector_members"]
-            )
-            saved[scope] = int(len(snap["sector_summary"]))
+        saved[scope] = int(len(snap["sector_summary"]))
     return saved
