@@ -714,7 +714,18 @@ _US_SPEC: dict[str, Any] = {
     "min_dv_summary_fmt": lambda raw: f"${raw/1_000_000:.0f}M",
     "min_price_summary_fmt": lambda v: f"≥ ${v:.0f}",
 
-    "show_market_cap_filter": False,
+    "show_market_cap_filter": True,
+    "min_marketcap_label": "최소 시가총액 (십억 $)",
+    "min_marketcap_default": 0,
+    "min_marketcap_max": 10_000,
+    "min_marketcap_step": 1,
+    "min_marketcap_help": (
+        "시가총액 하한. 0 = 미적용. yfinance 메타 기준이라 시총 데이터가 "
+        "없는 종목은 통과(제외 안 됨)."
+    ),
+    "min_marketcap_to_raw": lambda v: v * 1_000_000_000.0,
+    "min_marketcap_summary_fmt": lambda raw: f"시총 ≥ ${raw/1_000_000_000:,.0f}B",
+
     "show_china_filter": True,
     "show_risk_filter": False,
 
@@ -920,6 +931,11 @@ def _render_filter_expander(spec: dict) -> None:
                     "위험종목 데이터를 새로고침에서 갱신해야 효과가 적용됩니다."
                 ),
             )
+        st.caption(
+            "ℹ️ 필터는 **전체 RS 보기**에만 적용됩니다. "
+            "섹터별 보기는 새로고침 때 구운 값(고정 필터)을 읽으므로 "
+            "여기서 값을 바꿔도 즉시 반영되지 않습니다."
+        )
         if spec["extra_caption"]:
             st.caption(spec["extra_caption"])
 
