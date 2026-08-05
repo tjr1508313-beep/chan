@@ -213,6 +213,46 @@ def _is_risk_from_info(info: dict) -> bool:
     return False
 
 
+def _us_market_cap_fallback(ticker: str, info: dict) -> float | None:
+    """`.info` 에 marketCap 이 없을 때의 폴백.
+
+    1) `fast_info.market_cap` (가벼운 별도 엔드포인트)
+    2) shares(fast_info 또는 info) × 현재가(fast_info 또는 info)
+    모두 실패하면 None.
+    """
+    import yfinance as yf
+
+    try:
+        fi = yf.Ticker(ticker).fast_info
+    except Exception:
+        fi = None
+
+    def _fi(attr):
+        if fi is None:
+            return None
+        try:
+            return getattr(fi, attr, None)
+        except Exception:
+            return None
+
+    mc = _fi("market_cap")
+    if mc:
+        return float(mc)
+
+    shares = _fi("shares") or info.get("sharesOutstanding")
+    price = (
+        _fi("last_price")
+        or info.get("regularMarketPrice")
+        or info.get("currentPrice")
+    )
+    try:
+        if shares and price:
+            return float(shares) * float(price)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def us_get_meta(ticker: str) -> dict:
     """종목 메타데이터 반환.
 
@@ -245,6 +285,11 @@ def us_get_meta(ticker: str) -> dict:
     country = info.get("country")
     exchange = info.get("exchange") or info.get("fullExchangeName")
     market_cap = info.get("marketCap")
+
+    # `.info` 는 대량 조회 시 레이트리밋으로 marketCap 이 자주 None 이 됨.
+    # 더 가벼운 fast_info → shares×현재가 순으로 폴백해 커버리지를 높인다.
+    if not market_cap:
+        market_cap = _us_market_cap_fallback(ticker, info)
 
     meta: dict = {
         "name_en": name_en,

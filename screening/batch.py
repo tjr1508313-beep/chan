@@ -183,7 +183,10 @@ def _refresh_one_meta(t: str, ttl_days: int, force: bool) -> tuple[str, str | No
         if not force:
             age = cache.cache_meta_age_days(t)
             if age is not None and age < ttl_days:
-                return ("skipped", None)
+                # TTL 안이어도 시총이 비어 있으면 백필 위해 재조회.
+                existing = cache.cache_load_meta(t)
+                if existing and existing.get("market_cap"):
+                    return ("skipped", None)
 
         meta = us_data.us_get_meta(t)
         if not meta:
