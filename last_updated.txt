@@ -1,0 +1,4 @@
+2026-10-03T10:01:45Z
+market=us
+kst=2026-10-03 19:01 KST
+summary=[US] metadata repaired: 0, sectors: {'US_^IXIC': 11, 'US_^GSPC': 11}
