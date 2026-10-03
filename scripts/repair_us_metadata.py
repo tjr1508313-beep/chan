@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sqlite3
 
@@ -43,9 +44,19 @@ def repair_us_metadata(source_db: Path) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-db", type=Path, required=True)
+    parser.add_argument("--rebuild", action="store_true", help="외부 API 없이 미국 섹터 스냅샷 재계산")
+    parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
     cache.init_cache()
-    print(f"Repaired US metadata: {repair_us_metadata(args.source_db)}")
+    repaired = repair_us_metadata(args.source_db)
+    report = {"repaired": repaired, "summary": f"[US] metadata repaired: {repaired}"}
+    if args.rebuild:
+        from screening import sector
+        report["sector"] = sector.screen_rebuild_sector_snapshot("us")
+        report["summary"] += f", sectors: {report['sector']}"
+    if args.json_out:
+        args.json_out.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    print(report["summary"])
 
 
 if __name__ == "__main__":

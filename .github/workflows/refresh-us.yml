@@ -18,6 +18,11 @@ on:
         description: '손상 메타 복구에 사용할 과거 data-cache 커밋 SHA (선택)'
         required: false
         default: ''
+      recovery_only:
+        description: '외부 시세/메타 조회 없이 메타 복구와 섹터 재계산만 실행'
+        type: boolean
+        required: false
+        default: false
 
 # 같은 시장끼리는 직렬화 (지연 트리거 시 중첩 방지)
 concurrency:
@@ -108,9 +113,15 @@ jobs:
 
       - name: Run refresh
         id: refresh
+        env:
+          RECOVERY_ONLY: ${{ inputs.recovery_only }}
         run: |
           mkdir -p .ci-out
-          python -m scripts.refresh_cache --market us --json-out .ci-out/result.json
+          if [ "$RECOVERY_ONLY" = "true" ]; then
+            python -m scripts.repair_us_metadata --source-db .ci-out/recovery.db --rebuild --json-out .ci-out/result.json
+          else
+            python -m scripts.refresh_cache --market us --json-out .ci-out/result.json
+          fi
         continue-on-error: true
 
       - name: Capture summary
