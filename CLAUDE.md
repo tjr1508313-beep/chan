@@ -85,6 +85,7 @@ GitHub Actions가 평일 캐시 DB를 자동 갱신 후 `data-cache` 브랜치�
 ## 기술 스택
 
 - 미국 메타 조회 실패/불완전 응답(`quoteType` 누락)은 갱신 실패로 처리해 기존 메타를 보존한다. 과거 실패 응답으로 회사명=티커·섹터/국가/거래소 없음·위험 플래그가 저장된 행은 TTL 안이어도 재조회한다 (2026-10-03).
+- 이미 손상된 원격 캐시는 미국 갱신 수동 실행의 선택 입력 `recover_metadata_ref`에 과거 정상 data-cache 커밋 SHA를 지정해 복구할 수 있다. `scripts/repair_us_metadata.py`는 해당 DB의 정상 메타로 실패 응답 행만 복원하고 최신 시총·시세·한국 데이터와 명시적인 위험종목은 보존한다.
 - Python / Streamlit
 - 데이터 소스: 미국 = `yfinance`, 한국 = `FinanceDataReader`
 - 차트: `streamlit-lightweight-charts-pro` (TradingView lightweight-charts 래퍼)

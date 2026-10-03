@@ -13,6 +13,11 @@ on:
     - cron: '30 22 * * 0-4'   # UTC 22:30 (월~금 KST 07:30) - backup
     - cron: '0 23 * * 0-4'    # UTC 23:00 (월~금 KST 08:00) - backup
   workflow_dispatch:          # 수동 실행 허용
+    inputs:
+      recover_metadata_ref:
+        description: '손상 메타 복구에 사용할 과거 data-cache 커밋 SHA (선택)'
+        required: false
+        default: ''
 
 # 같은 시장끼리는 직렬화 (지연 트리거 시 중첩 방지)
 concurrency:
@@ -88,6 +93,18 @@ jobs:
             rm -f screening_cache.db.gz screening_cache.db
             echo "No existing cache (first run). Will create fresh."
           fi
+
+      - name: Recover damaged US metadata from known cache
+        if: github.event_name == 'workflow_dispatch' && inputs.recover_metadata_ref != ''
+        env:
+          RECOVERY_REF: ${{ inputs.recover_metadata_ref }}
+        run: |
+          set -e
+          [[ "$RECOVERY_REF" =~ ^[0-9a-fA-F]{40}$ ]] || exit 2
+          mkdir -p .ci-out
+          curl -fsSL -o .ci-out/recovery.db.gz "https://raw.githubusercontent.com/${{ github.repository }}/$RECOVERY_REF/screening_cache.db.gz"
+          gunzip -f .ci-out/recovery.db.gz
+          python -m scripts.repair_us_metadata --source-db .ci-out/recovery.db
 
       - name: Run refresh
         id: refresh
