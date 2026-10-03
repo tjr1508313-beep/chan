@@ -185,7 +185,13 @@ def _refresh_one_meta(t: str, ttl_days: int, force: bool) -> tuple[str, str | No
             if age is not None and age < ttl_days:
                 # TTL 안이어도 시총이 비어 있으면 백필 위해 재조회.
                 existing = cache.cache_load_meta(t)
-                if existing and existing.get("market_cap"):
+                # 과거 조회 실패가 정상 저장된 행은 TTL 안이어도 복구한다.
+                invalid = bool(existing and existing.get("is_risk")
+                               and existing.get("name_en") == t
+                               and not existing.get("sector")
+                               and not existing.get("country")
+                               and not existing.get("exchange"))
+                if existing and existing.get("market_cap") and not invalid:
                     return ("skipped", None)
 
         meta = us_data.us_get_meta(t)

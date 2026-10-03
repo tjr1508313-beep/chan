@@ -269,11 +269,11 @@ def us_get_meta(ticker: str) -> dict:
     """
     import yfinance as yf
 
-    info: dict = {}
-    try:
-        info = yf.Ticker(ticker).info or {}
-    except Exception:
-        info = {}
+    # 조회 장애를 위험종목으로 저장하면 기존 섹터/국가까지 지워져 전체 순위가
+    # 사라진다. 불완전한 응답은 배치의 failed 경로로 넘겨 기존 캐시를 보존한다.
+    info = yf.Ticker(ticker).info or {}
+    if not info.get("quoteType"):
+        raise ValueError(f"US metadata unavailable for {ticker}")
 
     name_en = (
         info.get("longName")

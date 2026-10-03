@@ -83,6 +83,8 @@ GitHub Actions가 평일 캐시 DB를 자동 갱신 후 `data-cache` 브랜치�
 - 설정: [docs/google-drive-watchlist-setup.md](docs/google-drive-watchlist-setup.md)
 
 ## 기술 스택
+
+- 미국 메타 조회 실패/불완전 응답(`quoteType` 누락)은 갱신 실패로 처리해 기존 메타를 보존한다. 과거 실패 응답으로 회사명=티커·섹터/국가/거래소 없음·위험 플래그가 저장된 행은 TTL 안이어도 재조회한다 (2026-10-03).
 - Python / Streamlit
 - 데이터 소스: 미국 = `yfinance`, 한국 = `FinanceDataReader`
 - 차트: `streamlit-lightweight-charts-pro` (TradingView lightweight-charts 래퍼)
