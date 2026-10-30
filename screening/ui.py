@@ -37,6 +37,7 @@ from streamlit_lightweight_charts_pro import (
 
 from .batch import screen_refresh_index, screen_refresh_meta, screen_refresh_prices
 from .betting import compute_bet_rows
+from .chart_geometry import chart_reference_anchors
 from .batch_kr import (
     screen_refresh_index_kr,
     screen_refresh_meta_kr,
@@ -1777,6 +1778,16 @@ def _render_chart(
             (_COLOR_MA60, "MA60"),
         )
     )
+    legend += "".join(
+        f"<span style='display:inline-flex;align-items:center;margin-right:12px;'>"
+        f"<span style='width:16px;border-top:2px {style} {color};margin-right:4px;'></span>"
+        f"<span style='color:{COLOR_MUTED};font-size:0.82rem;'>{label}</span></span>"
+        for color, style, label in (
+            ("#0891b2", "solid", "시종선"),
+            ("#d97706", "solid", "고저선"),
+            ("#334155", "dashed", "각도 이등분선"),
+        )
+    )
     st.markdown(
         f"<div style='font-size:1.05rem; color:{COLOR_TEXT}; "
         f"margin:4px 0 2px 4px; font-weight:600;'>"
@@ -1875,6 +1886,16 @@ def _render_chart(
     chart_key = f"lwc_chart_{spec['code']}_{ticker}_{key_suffix}"
     _apply_chart_stability(chart, f"stable-{chart_key}")
     chart.render(key=chart_key)
+
+    anchors = chart_reference_anchors(df_view)
+    if anchors:
+        # The component exposes chartApiMap/seriesRefsMap. Project in its actual
+        # pixel coordinates, then retain the initial bisector in data coordinates.
+        import streamlit.components.v1 as components
+
+        script = Path(__file__).with_name("chart_reference_lines.js").read_text(encoding="utf-8")
+        payload = json.dumps({"id": f"stable-{chart_key}", **anchors}, allow_nan=False)
+        components.html(f"<script>{script}\nmountReferenceLines({payload});</script>", height=0)
 
     _render_chart_metrics(spec, df, atr9)
 
